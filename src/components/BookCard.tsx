@@ -8,6 +8,9 @@ interface Book {
   title: string;
   author?: string | null;
   genre?: string | null;
+  publisher?: string | null;
+  publishedYear?: string | null;
+  edition?: string | null;
   pageCount?: number | null;
   isbn?: string | null;
   description?: string | null;
@@ -24,6 +27,9 @@ interface BookCardProps {
 
 export function BookCard({ book, onEdit, onDelete }: BookCardProps) {
   const [showDetail, setShowDetail] = useState(false);
+  const [translateX, setTranslateX] = useState(0);
+  const [isSwiping, setIsSwiping] = useState(false);
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
 
   const statusBadges: Record<string, { label: string; color: string; icon: any }> = {
     UNREAD: { label: 'Chci číst', color: 'bg-slate-800 text-slate-300 border-slate-700', icon: Bookmark },
@@ -34,45 +40,103 @@ export function BookCard({ book, onEdit, onDelete }: BookCardProps) {
   const badge = statusBadges[book.status] || statusBadges.UNREAD;
   const BadgeIcon = badge.icon;
 
+  const handleTouchStart = (e: React.TouchEvent) => {
+    setTouchStartX(e.touches[0].clientX);
+    setIsSwiping(false);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (touchStartX === null) return;
+    const diffX = e.touches[0].clientX - touchStartX;
+    if (diffX < 0) {
+      // Swiping left to reveal delete button
+      setTranslateX(Math.max(diffX, -100));
+      if (Math.abs(diffX) > 10) {
+        setIsSwiping(true);
+      }
+    } else if (translateX < 0) {
+      setTranslateX(Math.min(0, translateX + diffX));
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (translateX < -60) {
+      // Snap open delete button
+      setTranslateX(-80);
+    } else {
+      // Snap back
+      setTranslateX(0);
+    }
+    setTouchStartX(null);
+  };
+
   return (
     <>
-      <div
-        onClick={() => setShowDetail(true)}
-        className="group relative bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3 flex flex-col gap-3 hover:border-slate-700 transition-all cursor-pointer shadow-lg hover:shadow-indigo-500/5 active:scale-[0.98]"
-      >
-        <div className="relative aspect-[2/3] w-full rounded-xl overflow-hidden bg-slate-800/50 flex items-center justify-center border border-slate-800">
-          {book.coverUrl ? (
-            <img
-              src={book.coverUrl}
-              alt={book.title}
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-            />
-          ) : (
-            <div className="flex flex-col items-center justify-center text-slate-600 p-2 text-center">
-              <BookPlus size={36} className="mb-2 opacity-50" />
-              <span className="text-xs font-medium line-clamp-2">{book.title}</span>
-            </div>
-          )}
-
-          <div className="absolute top-2 right-2">
-            <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full border backdrop-blur-md ${badge.color}`}>
-              <BadgeIcon size={11} />
-              {badge.label}
-            </span>
-          </div>
+      <div className="relative overflow-hidden rounded-2xl">
+        {/* Background Action (Slide to delete) */}
+        <div className="absolute inset-y-0 right-0 w-20 bg-red-600/90 text-white flex items-center justify-center rounded-r-2xl z-0">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(book.id);
+              setTranslateX(0);
+            }}
+            className="w-full h-full flex flex-col items-center justify-center gap-1 text-xs font-semibold"
+          >
+            <Trash2 size={20} />
+            <span>Smazat</span>
+          </button>
         </div>
 
-        <div className="flex flex-col flex-1 justify-between gap-1">
-          <div>
-            <h3 className="font-semibold text-sm text-slate-100 line-clamp-1 group-hover:text-indigo-400 transition-colors">
-              {book.title}
-            </h3>
-            <p className="text-xs text-slate-400 line-clamp-1">{book.author || 'Neznámý autor'}</p>
+        {/* Card Content */}
+        <div
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onClick={() => {
+            if (!isSwiping && translateX === 0) {
+              setShowDetail(true);
+            } else {
+              setTranslateX(0);
+            }
+          }}
+          style={{ transform: `translateX(${translateX}px)` }}
+          className="group relative z-10 bg-slate-900 border border-slate-800/80 rounded-2xl p-3 flex flex-col gap-3 hover:border-slate-700 transition-transform duration-150 cursor-pointer shadow-lg hover:shadow-indigo-500/5 active:scale-[0.98]"
+        >
+          <div className="relative aspect-[2/3] w-full rounded-xl overflow-hidden bg-slate-800/50 flex items-center justify-center border border-slate-800">
+            {book.coverUrl ? (
+              <img
+                src={book.coverUrl}
+                alt={book.title}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+              />
+            ) : (
+              <div className="flex flex-col items-center justify-center text-slate-600 p-2 text-center">
+                <BookPlus size={36} className="mb-2 opacity-50" />
+                <span className="text-xs font-medium line-clamp-2">{book.title}</span>
+              </div>
+            )}
+
+            <div className="absolute top-2 right-2">
+              <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full border backdrop-blur-md ${badge.color}`}>
+                <BadgeIcon size={11} />
+                {badge.label}
+              </span>
+            </div>
           </div>
 
-          <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-800/60">
-            <span>{book.genre || 'Bez žánru'}</span>
-            {book.pageCount ? <span>{book.pageCount} str.</span> : null}
+          <div className="flex flex-col flex-1 justify-between gap-1">
+            <div>
+              <h3 className="font-semibold text-sm text-slate-100 line-clamp-1 group-hover:text-indigo-400 transition-colors">
+                {book.title}
+              </h3>
+              <p className="text-xs text-slate-400 line-clamp-1">{book.author || 'Neznámý autor'}</p>
+            </div>
+
+            <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-800/60">
+              <span>{book.genre || 'Bez žánru'}</span>
+              {book.pageCount ? <span>{book.pageCount} str.</span> : null}
+            </div>
           </div>
         </div>
       </div>
@@ -110,6 +174,9 @@ export function BookCard({ book, onEdit, onDelete }: BookCardProps) {
 
                 <div className="flex flex-wrap justify-center sm:justify-start gap-x-4 gap-y-1 text-xs text-slate-400 pt-2 border-t border-slate-800">
                   {book.genre && <div>Žánr: <span className="text-slate-200">{book.genre}</span></div>}
+                  {book.publisher && <div>Nakladatelství: <span className="text-slate-200">{book.publisher}</span></div>}
+                  {book.publishedYear && <div>Rok / Vydání: <span className="text-slate-200">{book.publishedYear}</span></div>}
+                  {book.edition && <div>Edice: <span className="text-slate-200">{book.edition}</span></div>}
                   {book.pageCount && <div>Stran: <span className="text-slate-200">{book.pageCount}</span></div>}
                   {book.isbn && <div>ISBN: <span className="text-slate-200">{book.isbn}</span></div>}
                 </div>

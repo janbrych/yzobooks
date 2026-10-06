@@ -18,18 +18,21 @@ model User {
 }
 
 model Book {
-  id          String   @id @default(uuid())
-  title       String
-  author      String?
-  genre       String?
-  pageCount   Int?
-  isbn        String?
-  description String?
-  coverUrl    String?
-  status      String   @default("UNREAD") // UNREAD, READING, READ
-  rating      Int?
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id            String   @id @default(uuid())
+  title         String
+  author        String?
+  genre         String?
+  publisher     String?
+  publishedYear String?
+  edition       String?
+  pageCount     Int?
+  isbn          String?
+  description   String?
+  coverUrl      String?
+  status        String   @default("UNREAD") // UNREAD, READING, READ
+  rating        Int?
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }

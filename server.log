@@ -1,9 +1,38 @@
 
-> my-app@0.1.0 start
-> next start
+> my-app@0.1.0 dev
+> next dev
 
-▲ Next.js 16.3.6
+▲ Next.js 16.3.6 (Turbopack)
 - Local:         http://localhost:3000
 - Network:       http://192.168.0.2:3000
-✓ Ready in 196ms
+✓ Ready in 541ms
 ✓ Running next.config.ts took 49ms
+
+ GET / 200 in 3.2s (next.js: 3.0s, application-code: 252ms)
+ GET /api/auth/me 200 in 809ms (next.js: 724ms, application-code: 85ms)
+ GET /api/auth/me 200 in 22ms (next.js: 5ms, application-code: 17ms)
+ GET / 200 in 67ms (next.js: 9ms, application-code: 58ms)
+ GET /api/auth/me 200 in 19ms (next.js: 7ms, application-code: 12ms)
+ GET /api/auth/me 200 in 9ms (next.js: 3ms, application-code: 6ms)
+ GET / 200 in 57ms (next.js: 4ms, application-code: 54ms)
+ GET /api/auth/me 200 in 10ms (next.js: 4ms, application-code: 7ms)
+ GET /api/auth/me 200 in 10ms (next.js: 4ms, application-code: 6ms)
+prisma:query SELECT `main`.`User`.`id`, `main`.`User`.`email`, `main`.`User`.`name`, `main`.`User`.`password`, `main`.`User`.`createdAt`, `main`.`User`.`updatedAt` FROM `main`.`User` WHERE (`main`.`User`.`email` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query INSERT INTO `main`.`User` (`id`, `email`, `name`, `password`, `createdAt`, `updatedAt`) VALUES (?,?,?,?,?,?) RETURNING `id` AS `id`, `email` AS `email`, `name` AS `name`, `password` AS `password`, `createdAt` AS `createdAt`, `updatedAt` AS `updatedAt`
+ POST /api/auth/register 200 in 494ms (next.js: 293ms, application-code: 201ms)
+prisma:query SELECT `main`.`User`.`id`, `main`.`User`.`email`, `main`.`User`.`name` FROM `main`.`User` WHERE (`main`.`User`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/auth/me 200 in 15ms (next.js: 4ms, application-code: 11ms)
+prisma:query SELECT `main`.`Book`.`id`, `main`.`Book`.`title`, `main`.`Book`.`author`, `main`.`Book`.`genre`, `main`.`Book`.`publisher`, `main`.`Book`.`publishedYear`, `main`.`Book`.`edition`, `main`.`Book`.`pageCount`, `main`.`Book`.`isbn`, `main`.`Book`.`description`, `main`.`Book`.`coverUrl`, `main`.`Book`.`status`, `main`.`Book`.`rating`, `main`.`Book`.`userId`, `main`.`Book`.`createdAt`, `main`.`Book`.`updatedAt` FROM `main`.`Book` WHERE `main`.`Book`.`userId` = ? ORDER BY `main`.`Book`.`createdAt` DESC LIMIT ? OFFSET ?
+ GET /api/books? 200 in 226ms (next.js: 211ms, application-code: 15ms)
+ GET / 200 in 57ms (next.js: 5ms, application-code: 52ms)
+ GET /api/auth/me 200 in 10ms (next.js: 3ms, application-code: 7ms)
+ GET /api/auth/me 200 in 9ms (next.js: 2ms, application-code: 7ms)
+prisma:query SELECT 1
+prisma:query SELECT `main`.`User`.`id`, `main`.`User`.`email`, `main`.`User`.`name`, `main`.`User`.`password`, `main`.`User`.`createdAt`, `main`.`User`.`updatedAt` FROM `main`.`User` WHERE (`main`.`User`.`email` = ? AND 1=1) LIMIT ? OFFSET ?
+ POST /api/auth/login 200 in 348ms (next.js: 193ms, application-code: 155ms)
+prisma:query SELECT `main`.`User`.`id`, `main`.`User`.`email`, `main`.`User`.`name` FROM `main`.`User` WHERE (`main`.`User`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+ GET /api/auth/me 200 in 11ms (next.js: 3ms, application-code: 8ms)
+prisma:query SELECT `main`.`Book`.`id`, `main`.`Book`.`title`, `main`.`Book`.`author`, `main`.`Book`.`genre`, `main`.`Book`.`publisher`, `main`.`Book`.`publishedYear`, `main`.`Book`.`edition`, `main`.`Book`.`pageCount`, `main`.`Book`.`isbn`, `main`.`Book`.`description`, `main`.`Book`.`coverUrl`, `main`.`Book`.`status`, `main`.`Book`.`rating`, `main`.`Book`.`userId`, `main`.`Book`.`createdAt`, `main`.`Book`.`updatedAt` FROM `main`.`Book` WHERE `main`.`Book`.`userId` = ? ORDER BY `main`.`Book`.`createdAt` DESC LIMIT ? OFFSET ?
+ GET /api/books? 200 in 9ms (next.js: 3ms, application-code: 6ms)
+prisma:query SELECT `main`.`Book`.`id`, `main`.`Book`.`title`, `main`.`Book`.`author`, `main`.`Book`.`genre`, `main`.`Book`.`publisher`, `main`.`Book`.`publishedYear`, `main`.`Book`.`edition`, `main`.`Book`.`pageCount`, `main`.`Book`.`isbn`, `main`.`Book`.`description`, `main`.`Book`.`coverUrl`, `main`.`Book`.`status`, `main`.`Book`.`rating`, `main`.`Book`.`userId`, `main`.`Book`.`createdAt`, `main`.`Book`.`updatedAt` FROM `main`.`Book` WHERE (`main`.`Book`.`userId` = ? AND (`main`.`Book`.`title` LIKE ? OR `main`.`Book`.`author` LIKE ? OR `main`.`Book`.`genre` LIKE ? OR `main`.`Book`.`publisher` LIKE ? OR `main`.`Book`.`isbn` LIKE ?)) ORDER BY `main`.`Book`.`createdAt` DESC LIMIT ? OFFSET ?
+ GET /api/books?search=George+Orwell 200 in 12ms (next.js: 3ms, application-code: 10ms)
