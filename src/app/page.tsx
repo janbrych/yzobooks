@@ -1,15 +1,16 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { Camera, Plus, Search, LogOut, Maximize, Minimize, BookOpen, Sparkles, Filter } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Camera, Plus, Search, LogOut, Maximize, Minimize, BookOpen, Sparkles } from 'lucide-react';
 import { BookCard } from '@/components/BookCard';
-import { CameraModal } from '@/components/CameraModal';
-import { BookFormModal } from '@/components/BookFormModal';
+import { CameraModal, BookData } from '@/components/CameraModal';
+import { BookFormModal, BookFormData } from '@/components/BookFormModal';
 import { AuthModal } from '@/components/AuthModal';
+import { getLocalBooks, addOrUpdateLocalBook, deleteLocalBook, LocalBook } from '@/lib/localStorage';
 
 export default function Home() {
-  const [user, setUser] = useState<any>(null);
-  const [books, setBooks] = useState<any[]>([]);
+  const [user, setUser] = useState<{ id: string; email: string } | null>(null);
+  const [books, setBooks] = useState<LocalBook[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
@@ -19,52 +20,73 @@ export default function Home() {
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
-  const [editingBook, setEditingBook] = useState<any>(null);
+  const [editingBook, setEditingBook] = useState<Partial<BookFormData> | null>(null);
 
-  useEffect(() => {
-    checkUser();
-  }, []);
-
-  useEffect(() => {
-    if (user) {
-      fetchBooks();
-    }
-  }, [user, filterStatus, searchQuery]);
-
-  const checkUser = async () => {
+  const checkUser = useCallback(async () => {
     try {
-      const res = await fetch('/api/auth/me');
-      const data = await res.json();
-      if (data.user) {
-        setUser(data.user);
-      } else {
-        setIsAuthOpen(true);
+      const res = await fetch('/api/auth/me').catch(() => null);
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data.user) {
+          setUser(data.user);
+          return;
+        }
       }
+      setUser({ id: 'local-user', email: 'Můj účet (Lokální)' });
     } catch (err) {
       console.error(err);
+      setUser({ id: 'local-user', email: 'Můj účet (Lokální)' });
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchBooks = async () => {
+  const fetchBooks = useCallback(async () => {
     try {
       const params = new URLSearchParams();
       if (filterStatus !== 'ALL') params.append('status', filterStatus);
       if (searchQuery) params.append('search', searchQuery);
 
-      const res = await fetch(`/api/books?${params.toString()}`);
-      if (res.ok) {
+      const res = await fetch(`/api/books?${params.toString()}`).catch(() => null);
+      if (res && res.ok) {
         const data = await res.json();
         setBooks(data.books || []);
+        return;
       }
+
+      // Fallback to localStorage (for GitHub Pages / static export / offline mode)
+      let localItems = getLocalBooks();
+      if (filterStatus !== 'ALL') {
+        localItems = localItems.filter((b) => b.status === filterStatus);
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        localItems = localItems.filter(
+          (b) =>
+            b.title.toLowerCase().includes(q) ||
+            b.author.toLowerCase().includes(q) ||
+            b.genre.toLowerCase().includes(q) ||
+            b.publisher.toLowerCase().includes(q)
+        );
+      }
+      setBooks(localItems);
     } catch (err) {
       console.error('Fetch books error:', err);
     }
-  };
+  }, [filterStatus, searchQuery]);
+
+  useEffect(() => {
+    checkUser();
+  }, [checkUser]);
+
+  useEffect(() => {
+    if (user) {
+      fetchBooks();
+    }
+  }, [user, fetchBooks]);
 
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
     setUser(null);
     setBooks([]);
     setIsAuthOpen(true);
@@ -80,38 +102,65 @@ export default function Home() {
     }
   };
 
-  const handleRecognizedBook = (recognizedData: any) => {
-    setEditingBook(recognizedData);
+  const handleRecognizedBook = (recognizedData: BookData) => {
+    setEditingBook(recognizedData as Partial<BookFormData>);
     setIsFormOpen(true);
   };
 
-  const handleSaveBook = async (formData: any) => {
+  const handleSaveBook = async (formData: Record<string, unknown>) => {
     const isEdit = Boolean(editingBook?.id);
-    const url = isEdit ? `/api/books/${editingBook.id}` : '/api/books';
+    const url = isEdit ? `/api/books/${editingBook?.id}` : '/api/books';
     const method = isEdit ? 'PUT' : 'POST';
 
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(formData),
-    });
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData),
+      }).catch(() => null);
 
-    if (res.ok) {
+      if (res && res.ok) {
+        fetchBooks();
+        setEditingBook(null);
+        return;
+      }
+
+      // LocalStorage fallback
+      addOrUpdateLocalBook({
+        id: editingBook?.id,
+        ...formData,
+      } as Partial<LocalBook>);
       fetchBooks();
       setEditingBook(null);
-    } else {
-      alert('Chyba při ukládání knihy.');
+    } catch (err) {
+      console.error('Save book error:', err);
+      // Fallback save locally
+      addOrUpdateLocalBook({
+        id: editingBook?.id,
+        ...formData,
+      } as Partial<LocalBook>);
+      fetchBooks();
+      setEditingBook(null);
     }
   };
 
   const handleDeleteBook = async (id: string) => {
     if (!confirm('Opravdu chcete tuto knihu smazat z knihovny?')) return;
 
-    const res = await fetch(`/api/books/${id}`, { method: 'DELETE' });
-    if (res.ok) {
+    try {
+      const res = await fetch(`/api/books/${id}`, { method: 'DELETE' }).catch(() => null);
+      if (res && res.ok) {
+        fetchBooks();
+        return;
+      }
+
+      // LocalStorage fallback
+      deleteLocalBook(id);
       fetchBooks();
-    } else {
-      alert('Chyba při mazání knihy.');
+    } catch (err) {
+      console.error('Delete book error:', err);
+      deleteLocalBook(id);
+      fetchBooks();
     }
   };
 
@@ -233,7 +282,7 @@ export default function Home() {
                 key={book.id}
                 book={book}
                 onEdit={(b) => {
-                  setEditingBook(b);
+                  setEditingBook(b as unknown as Partial<BookFormData>);
                   setIsFormOpen(true);
                 }}
                 onDelete={handleDeleteBook}

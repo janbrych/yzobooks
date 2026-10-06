@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 
+export const dynamic = 'force-static';
+
 // Helper to query Google Books API
 async function searchGoogleBooks(query: string) {
   try {
@@ -95,8 +97,6 @@ export async function POST(req: Request) {
     if (textQuery) {
       extractedText = textQuery;
     } else if (image) {
-      // Perform OCR on base64 image or text extraction
-      // Using Tesseract in Node server environment or server-side fallback
       try {
         const createWorker = (await import('tesseract.js')).createWorker;
         const worker = await createWorker('ces+eng');

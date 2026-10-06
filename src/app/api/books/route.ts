@@ -2,8 +2,14 @@ import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
+export const dynamic = 'force-static';
+
 // GET all books for current logged in user
 export async function GET(req: Request) {
+  if (process.env.STATIC_EXPORT === 'true' || process.env.GITHUB_ACTIONS === 'true') {
+    return NextResponse.json({ books: [] });
+  }
+
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: 'Neautorizovaný přístup.' }, { status: 401 });
@@ -13,7 +19,7 @@ export async function GET(req: Request) {
   const search = searchParams.get('search');
   const status = searchParams.get('status');
 
-  const whereClause: any = {
+  const whereClause: Record<string, unknown> = {
     userId: user.userId,
   };
 
@@ -41,6 +47,10 @@ export async function GET(req: Request) {
 
 // POST create a new book
 export async function POST(req: Request) {
+  if (process.env.STATIC_EXPORT === 'true' || process.env.GITHUB_ACTIONS === 'true') {
+    return NextResponse.json({ error: 'Static export mode' }, { status: 400 });
+  }
+
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: 'Neautorizovaný přístup.' }, { status: 401 });
