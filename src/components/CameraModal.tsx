@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { Camera, RefreshCw, X, Check, Sparkles } from 'lucide-react';
 import { processImageOrQuery, BookSearchResult } from '@/lib/scanner';
 
@@ -19,45 +19,72 @@ interface CameraModalProps {
 export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const [hasStream, setHasStream] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
 
-  const stopCamera = useCallback(() => {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-      setStream(null);
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
     }
-  }, [stream]);
-
-  const startCamera = useCallback(async () => {
-    setCameraError(null);
-    try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
-      setStream(mediaStream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-      }
-    } catch (err) {
-      console.error('Camera access error:', err);
-      setCameraError('Kamera není dostupná nebo byl odepřen přístup. Můžete vybrat fotografii ze souborů.');
-    }
-  }, []);
+    setHasStream(false);
+  };
 
   useEffect(() => {
-    if (isOpen && !capturedImage) {
-      startCamera();
-    } else {
-      stopCamera();
+    let isMounted = true;
+
+    async function initCamera() {
+      if (!isOpen || capturedImage) {
+        stopCamera();
+        return;
+      }
+
+      setCameraError(null);
+      try {
+        const mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+
+        if (!isMounted) {
+          mediaStream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+
+        streamRef.current = mediaStream;
+        setHasStream(true);
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = mediaStream;
+          videoRef.current.play().catch((e) => console.error('Video play error:', e));
+        }
+      } catch (err) {
+        if (!isMounted) return;
+        console.error('Camera access error:', err);
+        setCameraError('Kamera není dostupná nebo byl odepřen přístup. Můžete vybrat fotografii ze souborů.');
+      }
     }
+
+    initCamera();
+
     return () => {
+      isMounted = false;
       stopCamera();
     };
-  }, [isOpen, capturedImage, startCamera, stopCamera]);
+  }, [isOpen, capturedImage]);
+
+  useEffect(() => {
+    if (hasStream && streamRef.current && videoRef.current) {
+      if (videoRef.current.srcObject !== streamRef.current) {
+        videoRef.current.srcObject = streamRef.current;
+        videoRef.current.play().catch((e) => console.error('Video play error:', e));
+      }
+    }
+  }, [hasStream]);
 
   const capturePhoto = () => {
     if (!videoRef.current || !canvasRef.current) return;
@@ -88,13 +115,13 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     }
   };
 
-  const handleClose = useCallback(() => {
+  const handleClose = () => {
     setCapturedImage(null);
     setCameraError(null);
     setIsAnalyzing(false);
     stopCamera();
     onClose();
-  }, [onClose, stopCamera]);
+  };
 
   const analyzeImage = async () => {
     if (!capturedImage) return;
@@ -163,11 +190,12 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
         <div className="relative aspect-[3/4] w-full bg-slate-950 flex items-center justify-center overflow-hidden">
           {capturedImage ? (
             <img src={capturedImage} alt="Captured" className="w-full h-full object-cover" />
-          ) : stream ? (
+          ) : hasStream ? (
             <video
               ref={videoRef}
               autoPlay
               playsInline
+              muted
               className="w-full h-full object-cover"
             />
           ) : (
@@ -196,7 +224,6 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
               <button
                 onClick={() => {
                   setCapturedImage(null);
-                  startCamera();
                 }}
                 disabled={isAnalyzing}
                 className="flex-1 py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium text-sm flex items-center justify-center gap-2 transition-colors"
@@ -219,7 +246,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
               </label>
               <button
                 onClick={capturePhoto}
-                disabled={!stream}
+                disabled={!hasStream}
                 className="p-4 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 transition-transform active:scale-95 disabled:opacity-50"
               >
                 <Camera size={26} />
