@@ -6,6 +6,7 @@ import { BookCard } from '@/components/BookCard';
 import { CameraModal } from '@/components/CameraModal';
 import { BookFormModal } from '@/components/BookFormModal';
 import { AuthModal } from '@/components/AuthModal';
+import { getLocalBooks, addOrUpdateLocalBook, deleteLocalBook } from '@/lib/localStorage';
 
 export default function Home() {
   const [user, setUser] = useState<any>(null);
@@ -33,15 +34,19 @@ export default function Home() {
 
   const checkUser = async () => {
     try {
-      const res = await fetch('/api/auth/me');
-      const data = await res.json();
-      if (data.user) {
-        setUser(data.user);
-      } else {
-        setIsAuthOpen(true);
+      const res = await fetch('/api/auth/me').catch(() => null);
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data.user) {
+          setUser(data.user);
+          return;
+        }
       }
+      // If auth API returns null user or is unavailable (e.g. static site on GitHub Pages), auto-assign local session
+      setUser({ id: 'local-user', email: 'Můj účet (Lokální)' });
     } catch (err) {
       console.error(err);
+      setUser({ id: 'local-user', email: 'Můj účet (Lokální)' });
     } finally {
       setLoading(false);
     }
@@ -53,11 +58,29 @@ export default function Home() {
       if (filterStatus !== 'ALL') params.append('status', filterStatus);
       if (searchQuery) params.append('search', searchQuery);
 
-      const res = await fetch(`/api/books?${params.toString()}`);
-      if (res.ok) {
+      const res = await fetch(`/api/books?${params.toString()}`).catch(() => null);
+      if (res && res.ok) {
         const data = await res.json();
         setBooks(data.books || []);
+        return;
       }
+
+      // Fallback to local storage (for GitHub Pages / static export / offline mode)
+      let localItems = getLocalBooks();
+      if (filterStatus !== 'ALL') {
+        localItems = localItems.filter((b) => b.status === filterStatus);
+      }
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        localItems = localItems.filter(
+          (b) =>
+            b.title.toLowerCase().includes(q) ||
+            b.author.toLowerCase().includes(q) ||
+            b.genre.toLowerCase().includes(q) ||
+            b.publisher.toLowerCase().includes(q)
+        );
+      }
+      setBooks(localItems);
     } catch (err) {
       console.error('Fetch books error:', err);
     }
@@ -90,28 +113,55 @@ export default function Home() {
     const url = isEdit ? `/api/books/${editingBook.id}` : '/api/books';
     const method = isEdit ? 'PUT' : 'POST';
 
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(formData),
-    });
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData),
+      }).catch(() => null);
 
-    if (res.ok) {
+      if (res && res.ok) {
+        fetchBooks();
+        setEditingBook(null);
+        return;
+      }
+
+      // LocalStorage fallback
+      addOrUpdateLocalBook({
+        id: editingBook?.id,
+        ...formData,
+      });
       fetchBooks();
       setEditingBook(null);
-    } else {
-      alert('Chyba při ukládání knihy.');
+    } catch (err) {
+      console.error('Save book error:', err);
+      // Fallback save locally
+      addOrUpdateLocalBook({
+        id: editingBook?.id,
+        ...formData,
+      });
+      fetchBooks();
+      setEditingBook(null);
     }
   };
 
   const handleDeleteBook = async (id: string) => {
     if (!confirm('Opravdu chcete tuto knihu smazat z knihovny?')) return;
 
-    const res = await fetch(`/api/books/${id}`, { method: 'DELETE' });
-    if (res.ok) {
+    try {
+      const res = await fetch(`/api/books/${id}`, { method: 'DELETE' }).catch(() => null);
+      if (res && res.ok) {
+        fetchBooks();
+        return;
+      }
+
+      // LocalStorage fallback
+      deleteLocalBook(id);
       fetchBooks();
-    } else {
-      alert('Chyba při mazání knihy.');
+    } catch (err) {
+      console.error('Delete book error:', err);
+      deleteLocalBook(id);
+      fetchBooks();
     }
   };
 

@@ -2,6 +2,7 @@
 
 import React, { useRef, useState, useEffect } from 'react';
 import { Camera, RefreshCw, X, Check, Sparkles } from 'lucide-react';
+import { processImageOrQuery } from '@/lib/scanner';
 
 interface CameraModalProps {
   isOpen: boolean;
@@ -86,25 +87,39 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     setIsAnalyzing(true);
 
     try {
+      // Try backend API first
       const res = await fetch('/api/books/recognize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: capturedImage }),
-      });
+      }).catch(() => null);
 
-      const data = await res.json();
-      if (res.ok && data.result) {
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data.result) {
+          onRecognized({
+            ...data.result,
+            coverUrl: data.result.coverUrl || capturedImage,
+          });
+          handleClose();
+          return;
+        }
+      }
+
+      // Fallback to client-side recognition (for GitHub Pages / static export / server offline)
+      const clientResult = await processImageOrQuery({ image: capturedImage });
+      if (clientResult && clientResult.result) {
         onRecognized({
-          ...data.result,
-          coverUrl: data.result.coverUrl || capturedImage,
+          ...clientResult.result,
+          coverUrl: clientResult.result.coverUrl || capturedImage,
         });
         handleClose();
       } else {
-        alert(data.error || 'Nepodařilo se rozpoznat knihu z fotky.');
+        alert('Nepodařilo se rozpoznat knihu z fotky.');
       }
     } catch (err) {
       console.error('Analyze error:', err);
-      alert('Chyba při komunikaci se serverem.');
+      alert('Chyba při zpracování fotky.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -130,6 +145,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
             <span>Vyfotit knihu s AI</span>
           </div>
           <button
+            aria-label="Zavřít skenování"
             onClick={handleClose}
             className="p-1.5 text-slate-400 hover:text-white rounded-full hover:bg-slate-800 transition-colors"
           >

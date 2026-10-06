@@ -36,3 +36,65 @@ prisma:query SELECT `main`.`Book`.`id`, `main`.`Book`.`title`, `main`.`Book`.`au
  GET /api/books? 200 in 9ms (next.js: 3ms, application-code: 6ms)
 prisma:query SELECT `main`.`Book`.`id`, `main`.`Book`.`title`, `main`.`Book`.`author`, `main`.`Book`.`genre`, `main`.`Book`.`publisher`, `main`.`Book`.`publishedYear`, `main`.`Book`.`edition`, `main`.`Book`.`pageCount`, `main`.`Book`.`isbn`, `main`.`Book`.`description`, `main`.`Book`.`coverUrl`, `main`.`Book`.`status`, `main`.`Book`.`rating`, `main`.`Book`.`userId`, `main`.`Book`.`createdAt`, `main`.`Book`.`updatedAt` FROM `main`.`Book` WHERE (`main`.`Book`.`userId` = ? AND (`main`.`Book`.`title` LIKE ? OR `main`.`Book`.`author` LIKE ? OR `main`.`Book`.`genre` LIKE ? OR `main`.`Book`.`publisher` LIKE ? OR `main`.`Book`.`isbn` LIKE ?)) ORDER BY `main`.`Book`.`createdAt` DESC LIMIT ? OFFSET ?
  GET /api/books?search=George+Orwell 200 in 12ms (next.js: 3ms, application-code: 10ms)
+ GET / 200 in 544ms (next.js: 143ms, application-code: 400ms)
+ GET /api/auth/me 200 in 17ms (next.js: 4ms, application-code: 13ms)
+ GET /api/auth/me 200 in 13ms (next.js: 6ms, application-code: 7ms)
+ GET /api/books? 401 in 21ms (next.js: 10ms, application-code: 10ms)
+ GET /api/books? 401 in 10ms (next.js: 3ms, application-code: 7ms)
+ GET / 200 in 94ms (next.js: 6ms, application-code: 88ms)
+ GET /api/auth/me 200 in 12ms (next.js: 4ms, application-code: 8ms)
+ GET /api/auth/me 200 in 13ms (next.js: 4ms, application-code: 9ms)
+ GET /api/books? 401 in 22ms (next.js: 8ms, application-code: 14ms)
+ GET /api/books? 401 in 19ms (next.js: 8ms, application-code: 11ms)
+ GET / 200 in 57ms (next.js: 7ms, application-code: 50ms)
+ GET /api/auth/me 200 in 11ms (next.js: 3ms, application-code: 8ms)
+ GET /api/auth/me 200 in 9ms (next.js: 4ms, application-code: 5ms)
+ GET /api/books? 401 in 8ms (next.js: 3ms, application-code: 5ms)
+ GET /api/books? 401 in 13ms (next.js: 5ms, application-code: 8ms)
+ POST /api/books 401 in 12ms (next.js: 3ms, application-code: 9ms)
+ GET /api/books? 401 in 9ms (next.js: 4ms, application-code: 6ms)
+ GET / 200 in 50ms (next.js: 3ms, application-code: 47ms)
+ GET /api/auth/me 200 in 11ms (next.js: 3ms, application-code: 8ms)
+ GET /api/auth/me 200 in 11ms (next.js: 6ms, application-code: 5ms)
+ GET /api/books? 401 in 13ms (next.js: 3ms, application-code: 10ms)
+ GET /api/books? 401 in 9ms (next.js: 2ms, application-code: 7ms)
+ POST /api/books 401 in 8ms (next.js: 3ms, application-code: 6ms)
+ GET /api/books? 401 in 10ms (next.js: 2ms, application-code: 8ms)
+ GET / 200 in 75ms (next.js: 10ms, application-code: 65ms)
+ GET /api/auth/me 200 in 12ms (next.js: 3ms, application-code: 9ms)
+ GET /api/auth/me 200 in 7ms (next.js: 2ms, application-code: 5ms)
+ GET /api/books? 401 in 11ms (next.js: 3ms, application-code: 8ms)
+ GET /api/books? 401 in 13ms (next.js: 7ms, application-code: 6ms)
+ POST /api/books 401 in 13ms (next.js: 3ms, application-code: 10ms)
+ GET /api/books? 401 in 8ms (next.js: 2ms, application-code: 6ms)
+[browser] Camera access error: NotFoundError: Requested device not found (src/components/CameraModal.tsx:44:15)
+ GET / 200 in 58ms (next.js: 7ms, application-code: 52ms)
+ GET /api/auth/me 200 in 11ms (next.js: 3ms, application-code: 8ms)
+ GET /api/auth/me 200 in 8ms (next.js: 2ms, application-code: 6ms)
+ GET /api/books? 401 in 11ms (next.js: 5ms, application-code: 6ms)
+ GET /api/books? 401 in 8ms (next.js: 2ms, application-code: 6ms)
+ POST /api/books 401 in 9ms (next.js: 3ms, application-code: 6ms)
+ GET /api/books? 401 in 10ms (next.js: 3ms, application-code: 7ms)
+[browser] Camera access error: NotFoundError: Requested device not found (src/components/CameraModal.tsx:44:15)
+⚠ Found a change in next.config.ts. Restarting the server to apply the changes...
+▲ Next.js 16.3.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.0.2:3000
+✓ Ready in 741ms
+✓ Running next.config.ts took 99ms
+
+⚠ Found a change in next.config.ts. Restarting the server to apply the changes...
+▲ Next.js 16.3.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.0.2:3000
+✓ Ready in 455ms
+✓ Running next.config.ts took 46ms
+
+ GET / 200 in 615ms (next.js: 347ms, application-code: 269ms)
+ GET /api/auth/me 200 in 208ms (next.js: 118ms, application-code: 90ms)
+ GET /api/auth/me 200 in 20ms (next.js: 4ms, application-code: 16ms)
+ GET /api/books? 401 in 75ms (next.js: 54ms, application-code: 21ms)
+ GET /api/books? 401 in 12ms (next.js: 4ms, application-code: 8ms)
+ POST /api/books 401 in 17ms (next.js: 5ms, application-code: 12ms)
+ GET /api/books? 401 in 12ms (next.js: 3ms, application-code: 8ms)
+[browser] Camera access error: NotFoundError: Requested device not found (src/components/CameraModal.tsx:44:15)

@@ -161,8 +161,9 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">Název knihy *</label>
+            <label htmlFor="title-input" className="block text-xs font-medium text-slate-400 mb-1">Název knihy *</label>
             <input
+              id="title-input"
               type="text"
               required
               value={formData.title}
@@ -173,8 +174,9 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Autor</label>
+              <label htmlFor="author-input" className="block text-xs font-medium text-slate-400 mb-1">Autor</label>
               <input
+                id="author-input"
                 type="text"
                 value={formData.author}
                 onChange={(e) => setFormData({ ...formData, author: e.target.value })}
@@ -182,8 +184,9 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Žánr</label>
+              <label htmlFor="genre-input" className="block text-xs font-medium text-slate-400 mb-1">Žánr</label>
               <input
+                id="genre-input"
                 type="text"
                 value={formData.genre}
                 onChange={(e) => setFormData({ ...formData, genre: e.target.value })}
@@ -194,8 +197,9 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
 
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Nakladatelství</label>
+              <label htmlFor="publisher-input" className="block text-xs font-medium text-slate-400 mb-1">Nakladatelství</label>
               <input
+                id="publisher-input"
                 type="text"
                 value={formData.publisher}
                 onChange={(e) => setFormData({ ...formData, publisher: e.target.value })}
@@ -203,8 +207,9 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Rok / Vydání</label>
+              <label htmlFor="publishedyear-input" className="block text-xs font-medium text-slate-400 mb-1">Rok / Vydání</label>
               <input
+                id="publishedyear-input"
                 type="text"
                 value={formData.publishedYear}
                 onChange={(e) => setFormData({ ...formData, publishedYear: e.target.value })}
@@ -212,8 +217,9 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">Edice</label>
+              <label htmlFor="edition-input" className="block text-xs font-medium text-slate-400 mb-1">Edice</label>
               <input
+                id="edition-input"
                 type="text"
                 value={formData.edition}
                 onChange={(e) => setFormData({ ...formData, edition: e.target.value })}
