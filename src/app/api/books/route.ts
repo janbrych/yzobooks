@@ -26,6 +26,7 @@ export async function GET(req: Request) {
       { title: { contains: search } },
       { author: { contains: search } },
       { genre: { contains: search } },
+      { publisher: { contains: search } },
       { isbn: { contains: search } },
     ];
   }
@@ -47,7 +48,7 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
-    const { title, author, genre, pageCount, isbn, description, coverUrl, status, rating } = body;
+    const { title, author, genre, publisher, publishedYear, edition, pageCount, isbn, description, coverUrl, status, rating } = body;
 
     if (!title) {
       return NextResponse.json({ error: 'Název knihy je povinný.' }, { status: 400 });
@@ -58,6 +59,9 @@ export async function POST(req: Request) {
         title,
         author: author || null,
         genre: genre || null,
+        publisher: publisher || null,
+        publishedYear: publishedYear || null,
+        edition: edition || null,
         pageCount: pageCount ? parseInt(String(pageCount), 10) : null,
         isbn: isbn || null,
         description: description || null,

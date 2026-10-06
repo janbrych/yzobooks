@@ -15,6 +15,9 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
     title: '',
     author: '',
     genre: '',
+    publisher: '',
+    publishedYear: '',
+    edition: '',
     pageCount: '',
     isbn: '',
     description: '',
@@ -33,6 +36,9 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
         title: initialData.title || '',
         author: initialData.author || '',
         genre: initialData.genre || '',
+        publisher: initialData.publisher || '',
+        publishedYear: initialData.publishedYear || '',
+        edition: initialData.edition || '',
         pageCount: initialData.pageCount ? String(initialData.pageCount) : '',
         isbn: initialData.isbn || '',
         description: initialData.description || '',
@@ -45,6 +51,9 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
         title: '',
         author: '',
         genre: '',
+        publisher: '',
+        publishedYear: '',
+        edition: '',
         pageCount: '',
         isbn: '',
         description: '',
@@ -74,6 +83,9 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
           title: data.result.title || prev.title,
           author: data.result.author || prev.author,
           genre: data.result.genre || prev.genre,
+          publisher: data.result.publisher || prev.publisher,
+          publishedYear: data.result.publishedYear || prev.publishedYear,
+          edition: data.result.edition || prev.edition,
           pageCount: data.result.pageCount ? String(data.result.pageCount) : prev.pageCount,
           isbn: data.result.isbn || prev.isbn,
           description: data.result.description || prev.description,
@@ -175,6 +187,36 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
                 type="text"
                 value={formData.genre}
                 onChange={(e) => setFormData({ ...formData, genre: e.target.value })}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">Nakladatelství</label>
+              <input
+                type="text"
+                value={formData.publisher}
+                onChange={(e) => setFormData({ ...formData, publisher: e.target.value })}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">Rok / Vydání</label>
+              <input
+                type="text"
+                value={formData.publishedYear}
+                onChange={(e) => setFormData({ ...formData, publishedYear: e.target.value })}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">Edice</label>
+              <input
+                type="text"
+                value={formData.edition}
+                onChange={(e) => setFormData({ ...formData, edition: e.target.value })}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500"
               />
             </div>
