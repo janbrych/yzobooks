@@ -42,6 +42,7 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
         onClose();
       }
     } catch (err) {
+      console.error('Auth error:', err);
       setError('Nepodařilo se připojit k serveru.');
     } finally {
       setLoading(false);

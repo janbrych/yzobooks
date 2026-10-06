@@ -2,7 +2,17 @@ import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
+export const dynamic = 'force-static';
+
+export function generateStaticParams() {
+  return [{ id: 'default' }];
+}
+
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (process.env.STATIC_EXPORT === 'true' || process.env.GITHUB_ACTIONS === 'true') {
+    return NextResponse.json({ book: null });
+  }
+
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: 'Neautorizovaný přístup.' }, { status: 401 });
@@ -22,6 +32,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 }
 
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (process.env.STATIC_EXPORT === 'true' || process.env.GITHUB_ACTIONS === 'true') {
+    return NextResponse.json({ error: 'Static export mode' }, { status: 400 });
+  }
+
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: 'Neautorizovaný přístup.' }, { status: 401 });
@@ -67,6 +81,10 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 }
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (process.env.STATIC_EXPORT === 'true' || process.env.GITHUB_ACTIONS === 'true') {
+    return NextResponse.json({ error: 'Static export mode' }, { status: 400 });
+  }
+
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: 'Neautorizovaný přístup.' }, { status: 401 });

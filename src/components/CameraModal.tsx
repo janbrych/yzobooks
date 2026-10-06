@@ -1,12 +1,19 @@
 'use client';
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, RefreshCw, X, Check, Sparkles } from 'lucide-react';
+import { processImageOrQuery, BookSearchResult } from '@/lib/scanner';
+
+export interface BookData extends Partial<BookSearchResult> {
+  id?: string;
+  status?: string;
+  rating?: number | null;
+}
 
 interface CameraModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onRecognized: (bookData: any) => void;
+  onRecognized: (bookData: BookData) => void;
 }
 
 export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps) {
@@ -17,18 +24,14 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (isOpen && !capturedImage) {
-      startCamera();
-    } else {
-      stopCamera();
+  const stopCamera = useCallback(() => {
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      setStream(null);
     }
-    return () => {
-      stopCamera();
-    };
-  }, [isOpen, capturedImage]);
+  }, [stream]);
 
-  const startCamera = async () => {
+  const startCamera = useCallback(async () => {
     setCameraError(null);
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -43,14 +46,18 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       console.error('Camera access error:', err);
       setCameraError('Kamera není dostupná nebo byl odepřen přístup. Můžete vybrat fotografii ze souborů.');
     }
-  };
+  }, []);
 
-  const stopCamera = () => {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-      setStream(null);
+  useEffect(() => {
+    if (isOpen && !capturedImage) {
+      startCamera();
+    } else {
+      stopCamera();
     }
-  };
+    return () => {
+      stopCamera();
+    };
+  }, [isOpen, capturedImage, startCamera, stopCamera]);
 
   const capturePhoto = () => {
     if (!videoRef.current || !canvasRef.current) return;
@@ -81,41 +88,55 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     }
   };
 
-  const analyzeImage = async () => {
-    if (!capturedImage) return;
-    setIsAnalyzing(true);
-
-    try {
-      const res = await fetch('/api/books/recognize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: capturedImage }),
-      });
-
-      const data = await res.json();
-      if (res.ok && data.result) {
-        onRecognized({
-          ...data.result,
-          coverUrl: data.result.coverUrl || capturedImage,
-        });
-        handleClose();
-      } else {
-        alert(data.error || 'Nepodařilo se rozpoznat knihu z fotky.');
-      }
-    } catch (err) {
-      console.error('Analyze error:', err);
-      alert('Chyba při komunikaci se serverem.');
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     setCapturedImage(null);
     setCameraError(null);
     setIsAnalyzing(false);
     stopCamera();
     onClose();
+  }, [onClose, stopCamera]);
+
+  const analyzeImage = async () => {
+    if (!capturedImage) return;
+    setIsAnalyzing(true);
+
+    try {
+      // Try backend API first
+      const res = await fetch('/api/books/recognize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: capturedImage }),
+      }).catch(() => null);
+
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data.result) {
+          onRecognized({
+            ...data.result,
+            coverUrl: data.result.coverUrl || capturedImage,
+          });
+          handleClose();
+          return;
+        }
+      }
+
+      // Fallback to client-side recognition (for GitHub Pages / static export / server offline)
+      const clientResult = await processImageOrQuery({ image: capturedImage });
+      if (clientResult && clientResult.result) {
+        onRecognized({
+          ...clientResult.result,
+          coverUrl: clientResult.result.coverUrl || capturedImage,
+        });
+        handleClose();
+      } else {
+        alert('Nepodařilo se rozpoznat knihu z fotky.');
+      }
+    } catch (err) {
+      console.error('Analyze error:', err);
+      alert('Chyba při zpracování fotky.');
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   if (!isOpen) return null;
@@ -130,6 +151,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
             <span>Vyfotit knihu s AI</span>
           </div>
           <button
+            aria-label="Zavřít skenování"
             onClick={handleClose}
             className="p-1.5 text-slate-400 hover:text-white rounded-full hover:bg-slate-800 transition-colors"
           >
