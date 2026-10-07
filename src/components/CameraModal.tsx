@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, RefreshCw, X, Check, Sparkles } from 'lucide-react';
 import { processImageOrQuery, BookSearchResult } from '@/lib/scanner';
 
@@ -21,70 +21,74 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
+  const [isLoadingCamera, setIsLoadingCamera] = useState(false);
   const [hasStream, setHasStream] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
 
-  const stopCamera = () => {
+  const stopCamera = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
     setHasStream(false);
-  };
+    setIsLoadingCamera(false);
+  }, []);
 
-  useEffect(() => {
-    let isMounted = true;
+  const startCamera = useCallback(async () => {
+    stopCamera();
+    setCameraError(null);
+    setIsLoadingCamera(true);
 
-    async function initCamera() {
-      if (!isOpen || capturedImage) {
-        stopCamera();
-        return;
-      }
+    let mediaStream: MediaStream | null = null;
 
-      setCameraError(null);
+    // Try ideal environment camera first (mobile rear camera)
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+    } catch {
+      // Fallback to any available video camera (laptops / webcams)
       try {
-        const mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
           audio: false,
         });
-
-        if (!isMounted) {
-          mediaStream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-
-        streamRef.current = mediaStream;
-        setHasStream(true);
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = mediaStream;
-          videoRef.current.play().catch((e) => console.error('Video play error:', e));
-        }
       } catch (err) {
-        if (!isMounted) return;
         console.error('Camera access error:', err);
         setCameraError('Kamera není dostupná nebo byl odepřen přístup. Můžete vybrat fotografii ze souborů.');
+        setIsLoadingCamera(false);
+        return;
       }
     }
 
-    initCamera();
+    if (!mediaStream) return;
 
-    return () => {
-      isMounted = false;
-      stopCamera();
-    };
-  }, [isOpen, capturedImage]);
+    streamRef.current = mediaStream;
+    setHasStream(true);
+    setIsLoadingCamera(false);
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = mediaStream;
+      videoRef.current.play().catch((err) => console.error('Video play error:', err));
+    }
+  }, [stopCamera]);
 
   useEffect(() => {
-    if (hasStream && streamRef.current && videoRef.current) {
-      if (videoRef.current.srcObject !== streamRef.current) {
-        videoRef.current.srcObject = streamRef.current;
-        videoRef.current.play().catch((e) => console.error('Video play error:', e));
-      }
+    if (isOpen && !capturedImage) {
+      startCamera();
+    } else {
+      stopCamera();
     }
-  }, [hasStream]);
+    return () => {
+      stopCamera();
+    };
+  }, [isOpen, capturedImage, startCamera, stopCamera]);
 
   const capturePhoto = () => {
     if (!videoRef.current || !canvasRef.current) return;
@@ -128,7 +132,6 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     setIsAnalyzing(true);
 
     try {
-      // Try backend API first
       const res = await fetch('/api/books/recognize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -147,7 +150,6 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
         }
       }
 
-      // Fallback to client-side recognition (for GitHub Pages / static export / server offline)
       const clientResult = await processImageOrQuery({ image: capturedImage });
       if (clientResult && clientResult.result) {
         onRecognized({
@@ -190,19 +192,30 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
         <div className="relative aspect-[3/4] w-full bg-slate-950 flex items-center justify-center overflow-hidden">
           {capturedImage ? (
             <img src={capturedImage} alt="Captured" className="w-full h-full object-cover" />
-          ) : hasStream ? (
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-cover"
-            />
           ) : (
-            <div className="p-6 text-center flex flex-col items-center gap-3">
-              <Camera size={48} className="text-slate-600 animate-pulse" />
-              <p className="text-xs text-slate-400">{cameraError || 'Načítám kameru...'}</p>
-            </div>
+            <>
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                onLoadedMetadata={() => {
+                  if (videoRef.current) {
+                    videoRef.current.play().catch(() => {});
+                  }
+                }}
+                className={`w-full h-full object-cover ${hasStream ? 'block' : 'hidden'}`}
+              />
+
+              {!hasStream && (
+                <div className="p-6 text-center flex flex-col items-center gap-3">
+                  <Camera size={48} className="text-slate-600 animate-pulse" />
+                  <p className="text-xs text-slate-400">
+                    {cameraError || (isLoadingCamera ? 'Načítám kameru...' : 'Příprava kamery...')}
+                  </p>
+                </div>
+              )}
+            </>
           )}
 
           <canvas ref={canvasRef} className="hidden" />
