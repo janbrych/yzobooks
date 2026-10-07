@@ -15,37 +15,6 @@ export interface BookSearchResult {
   coverUrl: string;
 }
 
-interface GoogleBooksItem {
-  volumeInfo?: {
-    title?: string;
-    authors?: string[];
-    categories?: string[];
-    publisher?: string;
-    publishedDate?: string;
-    pageCount?: number;
-    description?: string;
-    industryIdentifiers?: Array<{ type: string; identifier: string }>;
-    imageLinks?: {
-      thumbnail?: string;
-      smallThumbnail?: string;
-    };
-  };
-}
-
-interface OpenLibraryDoc {
-  title?: string;
-  author_name?: string[];
-  subject?: string[];
-  publisher?: string[];
-  first_publish_year?: number;
-  publish_year?: number[];
-  edition_count?: number;
-  number_of_pages_median?: number;
-  isbn?: string[];
-  first_sentence?: string[];
-  cover_i?: number;
-}
-
 // Helper to extract ISBN digits from text
 export function extractISBN(text: string): string | null {
   const isbn13Regex = /(?:ISBN(?:-13)?:?\s*)?(97[89][-\s]?[0-9]{1,5}[-\s]?[0-9]{1,7}[-\s]?[0-9]{1,7}[-\s]?[0-9])/gi;
@@ -74,10 +43,10 @@ export async function searchGoogleBooks(query: string): Promise<BookSearchResult
     const data = await res.json();
     if (!data.items) return [];
 
-    return data.items.map((item: GoogleBooksItem) => {
+    return data.items.map((item: any) => {
       const info = item.volumeInfo || {};
       const industryIdentifiers = info.industryIdentifiers || [];
-      const isbnObj = industryIdentifiers.find((i) => i.type === 'ISBN_13') || industryIdentifiers.find((i) => i.type === 'ISBN_10');
+      const isbnObj = industryIdentifiers.find((i: any) => i.type === 'ISBN_13') || industryIdentifiers.find((i: any) => i.type === 'ISBN_10');
 
       return {
         title: info.title || '',
@@ -106,7 +75,7 @@ export async function searchOpenLibrary(query: string): Promise<BookSearchResult
     const data = await res.json();
     if (!data.docs) return [];
 
-    return data.docs.map((doc: OpenLibraryDoc) => ({
+    return data.docs.map((doc: any) => ({
       title: doc.title || '',
       author: doc.author_name ? doc.author_name.join(', ') : '',
       genre: doc.subject ? doc.subject.slice(0, 3).join(', ') : '',

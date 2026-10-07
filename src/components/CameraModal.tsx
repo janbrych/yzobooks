@@ -2,18 +2,12 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, RefreshCw, X, Check, Sparkles } from 'lucide-react';
-import { processImageOrQuery, BookSearchResult } from '@/lib/scanner';
-
-export interface BookData extends Partial<BookSearchResult> {
-  id?: string;
-  status?: string;
-  rating?: number | null;
-}
+import { processImageOrQuery } from '@/lib/scanner';
 
 interface CameraModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onRecognized: (bookData: BookData) => void;
+  onRecognized: (bookData: any) => void;
 }
 
 export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps) {
@@ -21,7 +15,6 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const [isLoadingCamera, setIsLoadingCamera] = useState(false);
   const [hasStream, setHasStream] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -36,24 +29,25 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       videoRef.current.srcObject = null;
     }
     setHasStream(false);
-    setIsLoadingCamera(false);
   }, []);
 
   const startCamera = useCallback(async () => {
     stopCamera();
     setCameraError(null);
-    setIsLoadingCamera(true);
+
+    if (typeof window === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Skenování kamerou není v tomto prohlížeči podporováno.');
+      return;
+    }
 
     let mediaStream: MediaStream | null = null;
 
-    // Try ideal environment camera first (mobile rear camera)
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
     } catch {
-      // Fallback to any available video camera (laptops / webcams)
       try {
         mediaStream = await navigator.mediaDevices.getUserMedia({
           video: true,
@@ -62,7 +56,6 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       } catch (err) {
         console.error('Camera access error:', err);
         setCameraError('Kamera není dostupná nebo byl odepřen přístup. Můžete vybrat fotografii ze souborů.');
-        setIsLoadingCamera(false);
         return;
       }
     }
@@ -71,7 +64,6 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
 
     streamRef.current = mediaStream;
     setHasStream(true);
-    setIsLoadingCamera(false);
 
     if (videoRef.current) {
       videoRef.current.srcObject = mediaStream;
@@ -210,9 +202,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
               {!hasStream && (
                 <div className="p-6 text-center flex flex-col items-center gap-3">
                   <Camera size={48} className="text-slate-600 animate-pulse" />
-                  <p className="text-xs text-slate-400">
-                    {cameraError || (isLoadingCamera ? 'Načítám kameru...' : 'Příprava kamery...')}
-                  </p>
+                  <p className="text-xs text-slate-400">{cameraError || 'Načítám kameru...'}</p>
                 </div>
               )}
             </>

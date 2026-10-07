@@ -2,33 +2,16 @@
 
 import React, { useState, useEffect } from 'react';
 import { X, Save, Search, RefreshCw, Star } from 'lucide-react';
-import { processImageOrQuery, BookSearchResult } from '@/lib/scanner';
-
-export interface BookFormData {
-  id?: string;
-  title: string;
-  author: string;
-  genre: string;
-  publisher: string;
-  publishedYear: string;
-  edition: string;
-  pageCount: string;
-  isbn: string;
-  description: string;
-  coverUrl: string;
-  status: string;
-  rating: number;
-}
 
 interface BookFormModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (formData: Record<string, unknown>) => Promise<void>;
-  initialData?: Partial<BookFormData> | null;
+  onSave: (formData: any) => Promise<void>;
+  initialData?: any;
 }
 
 export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookFormModalProps) {
-  const [formData, setFormData] = useState<BookFormData>({
+  const [formData, setFormData] = useState({
     title: '',
     author: '',
     genre: '',
@@ -48,10 +31,8 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    if (!isOpen) return;
     if (initialData) {
       setFormData({
-        id: initialData.id,
         title: initialData.title || '',
         author: initialData.author || '',
         genre: initialData.genre || '',
@@ -85,47 +66,31 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
 
   if (!isOpen) return null;
 
-  const applySearchResult = (resData: BookSearchResult) => {
-    setFormData((prev) => ({
-      ...prev,
-      title: resData.title || prev.title,
-      author: resData.author || prev.author,
-      genre: resData.genre || prev.genre,
-      publisher: resData.publisher || prev.publisher,
-      publishedYear: resData.publishedYear || prev.publishedYear,
-      edition: resData.edition || prev.edition,
-      pageCount: resData.pageCount ? String(resData.pageCount) : prev.pageCount,
-      isbn: resData.isbn || prev.isbn,
-      description: resData.description || prev.description,
-      coverUrl: resData.coverUrl || prev.coverUrl,
-    }));
-  };
-
   const handleSearchOnline = async () => {
     if (!searchQuery.trim()) return;
     setIsSearching(true);
 
     try {
-      // Try backend API first
       const res = await fetch('/api/books/recognize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: searchQuery }),
-      }).catch(() => null);
-
-      if (res && res.ok) {
-        const data = await res.json();
-        if (data.result) {
-          applySearchResult(data.result);
-          setIsSearching(false);
-          return;
-        }
-      }
-
-      // Fallback to direct client-side search (for static export on GitHub Pages)
-      const clientResult = await processImageOrQuery({ query: searchQuery });
-      if (clientResult && clientResult.result) {
-        applySearchResult(clientResult.result);
+      });
+      const data = await res.json();
+      if (res.ok && data.result) {
+        setFormData((prev) => ({
+          ...prev,
+          title: data.result.title || prev.title,
+          author: data.result.author || prev.author,
+          genre: data.result.genre || prev.genre,
+          publisher: data.result.publisher || prev.publisher,
+          publishedYear: data.result.publishedYear || prev.publishedYear,
+          edition: data.result.edition || prev.edition,
+          pageCount: data.result.pageCount ? String(data.result.pageCount) : prev.pageCount,
+          isbn: data.result.isbn || prev.isbn,
+          description: data.result.description || prev.description,
+          coverUrl: data.result.coverUrl || prev.coverUrl,
+        }));
       } else {
         alert('Nenalezeny žádné podrobnosti k vyhledanému dotazu.');
       }

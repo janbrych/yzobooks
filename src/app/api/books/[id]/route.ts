@@ -5,37 +5,14 @@ import { prisma } from '@/lib/prisma';
 export const dynamic = 'force-static';
 
 export function generateStaticParams() {
-  return [{ id: 'default' }];
+  return [{ id: 'placeholder' }];
 }
 
-export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  if (process.env.STATIC_EXPORT === 'true' || process.env.GITHUB_ACTIONS === 'true') {
-    return NextResponse.json({ book: null });
-  }
-
-  const user = await getCurrentUser();
-  if (!user) {
-    return NextResponse.json({ error: 'Neautorizovaný přístup.' }, { status: 401 });
-  }
-
-  const { id } = await params;
-
-  const book = await prisma.book.findFirst({
-    where: { id, userId: user.userId },
-  });
-
-  if (!book) {
-    return NextResponse.json({ error: 'Kniha nenalezena.' }, { status: 404 });
-  }
-
-  return NextResponse.json({ book });
-}
-
-export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  if (process.env.STATIC_EXPORT === 'true' || process.env.GITHUB_ACTIONS === 'true') {
-    return NextResponse.json({ error: 'Static export mode' }, { status: 400 });
-  }
-
+// PUT update a book
+export async function PUT(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: 'Neautorizovaný přístup.' }, { status: 401 });
@@ -47,44 +24,45 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     const body = await req.json();
     const { title, author, genre, publisher, publishedYear, edition, pageCount, isbn, description, coverUrl, status, rating } = body;
 
-    const existingBook = await prisma.book.findFirst({
+    // Verify ownership
+    const existing = await prisma.book.findFirst({
       where: { id, userId: user.userId },
     });
 
-    if (!existingBook) {
+    if (!existing) {
       return NextResponse.json({ error: 'Kniha nenalezena.' }, { status: 404 });
     }
 
-    const updatedBook = await prisma.book.update({
+    const updated = await prisma.book.update({
       where: { id },
       data: {
-        title: title ?? existingBook.title,
-        author: author ?? existingBook.author,
-        genre: genre ?? existingBook.genre,
-        publisher: publisher ?? existingBook.publisher,
-        publishedYear: publishedYear ?? existingBook.publishedYear,
-        edition: edition ?? existingBook.edition,
-        pageCount: pageCount !== undefined ? (pageCount ? parseInt(String(pageCount), 10) : null) : existingBook.pageCount,
-        isbn: isbn ?? existingBook.isbn,
-        description: description ?? existingBook.description,
-        coverUrl: coverUrl ?? existingBook.coverUrl,
-        status: status ?? existingBook.status,
-        rating: rating !== undefined ? (rating ? parseInt(String(rating), 10) : null) : existingBook.rating,
+        title,
+        author: author || null,
+        genre: genre || null,
+        publisher: publisher || null,
+        publishedYear: publishedYear || null,
+        edition: edition || null,
+        pageCount: pageCount ? parseInt(String(pageCount), 10) : null,
+        isbn: isbn || null,
+        description: description || null,
+        coverUrl: coverUrl || null,
+        status: status || 'UNREAD',
+        rating: rating ? parseInt(String(rating), 10) : null,
       },
     });
 
-    return NextResponse.json({ book: updatedBook });
+    return NextResponse.json({ book: updated });
   } catch (error) {
     console.error('Update book error:', error);
-    return NextResponse.json({ error: 'Chyba při aktualizaci knihy.' }, { status: 500 });
+    return NextResponse.json({ error: 'Chyba při úpravě knihy.' }, { status: 500 });
   }
 }
 
-export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  if (process.env.STATIC_EXPORT === 'true' || process.env.GITHUB_ACTIONS === 'true') {
-    return NextResponse.json({ error: 'Static export mode' }, { status: 400 });
-  }
-
+// DELETE a book
+export async function DELETE(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: 'Neautorizovaný přístup.' }, { status: 401 });
@@ -93,11 +71,11 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
   const { id } = await params;
 
   try {
-    const existingBook = await prisma.book.findFirst({
+    const existing = await prisma.book.findFirst({
       where: { id, userId: user.userId },
     });
 
-    if (!existingBook) {
+    if (!existing) {
       return NextResponse.json({ error: 'Kniha nenalezena.' }, { status: 404 });
     }
 
@@ -105,7 +83,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
       where: { id },
     });
 
-    return NextResponse.json({ message: 'Kniha byla úspěšně smazána.' });
+    return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Delete book error:', error);
     return NextResponse.json({ error: 'Chyba při mazání knihy.' }, { status: 500 });

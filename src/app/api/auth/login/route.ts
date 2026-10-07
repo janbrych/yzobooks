@@ -6,10 +6,6 @@ import { signToken } from '@/lib/auth';
 export const dynamic = 'force-static';
 
 export async function POST(req: Request) {
-  if (process.env.STATIC_EXPORT === 'true' || process.env.GITHUB_ACTIONS === 'true') {
-    return NextResponse.json({ error: 'Static export mode' }, { status: 400 });
-  }
-
   try {
     const { email, password } = await req.json();
 

@@ -3,14 +3,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Camera, Plus, Search, LogOut, Maximize, Minimize, BookOpen, Sparkles } from 'lucide-react';
 import { BookCard } from '@/components/BookCard';
-import { CameraModal, BookData } from '@/components/CameraModal';
-import { BookFormModal, BookFormData } from '@/components/BookFormModal';
+import { CameraModal } from '@/components/CameraModal';
+import { BookFormModal } from '@/components/BookFormModal';
 import { AuthModal } from '@/components/AuthModal';
-import { getLocalBooks, addOrUpdateLocalBook, deleteLocalBook, LocalBook } from '@/lib/localStorage';
+import { getLocalBooks, addOrUpdateLocalBook, deleteLocalBook } from '@/lib/localStorage';
 
 export default function Home() {
-  const [user, setUser] = useState<{ id: string; email: string } | null>(null);
-  const [books, setBooks] = useState<LocalBook[]>([]);
+  const [user, setUser] = useState<any>(null);
+  const [books, setBooks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
@@ -20,7 +20,7 @@ export default function Home() {
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
-  const [editingBook, setEditingBook] = useState<Partial<BookFormData> | null>(null);
+  const [editingBook, setEditingBook] = useState<any>(null);
 
   const checkUser = useCallback(async () => {
     try {
@@ -32,6 +32,7 @@ export default function Home() {
           return;
         }
       }
+      // If auth API is unavailable (e.g. static export on GitHub Pages), auto-assign local session
       setUser({ id: 'local-user', email: 'Můj účet (Lokální)' });
     } catch (err) {
       console.error(err);
@@ -54,7 +55,7 @@ export default function Home() {
         return;
       }
 
-      // Fallback to localStorage (for GitHub Pages / static export / offline mode)
+      // Fallback to local storage (for GitHub Pages / static export / offline mode)
       let localItems = getLocalBooks();
       if (filterStatus !== 'ALL') {
         localItems = localItems.filter((b) => b.status === filterStatus);
@@ -102,14 +103,14 @@ export default function Home() {
     }
   };
 
-  const handleRecognizedBook = (recognizedData: BookData) => {
-    setEditingBook(recognizedData as Partial<BookFormData>);
+  const handleRecognizedBook = (recognizedData: any) => {
+    setEditingBook(recognizedData);
     setIsFormOpen(true);
   };
 
-  const handleSaveBook = async (formData: Record<string, unknown>) => {
+  const handleSaveBook = async (formData: any) => {
     const isEdit = Boolean(editingBook?.id);
-    const url = isEdit ? `/api/books/${editingBook?.id}` : '/api/books';
+    const url = isEdit ? `/api/books/${editingBook.id}` : '/api/books';
     const method = isEdit ? 'PUT' : 'POST';
 
     try {
@@ -129,7 +130,7 @@ export default function Home() {
       addOrUpdateLocalBook({
         id: editingBook?.id,
         ...formData,
-      } as Partial<LocalBook>);
+      });
       fetchBooks();
       setEditingBook(null);
     } catch (err) {
@@ -138,7 +139,7 @@ export default function Home() {
       addOrUpdateLocalBook({
         id: editingBook?.id,
         ...formData,
-      } as Partial<LocalBook>);
+      });
       fetchBooks();
       setEditingBook(null);
     }
@@ -282,7 +283,7 @@ export default function Home() {
                 key={book.id}
                 book={book}
                 onEdit={(b) => {
-                  setEditingBook(b as unknown as Partial<BookFormData>);
+                  setEditingBook(b);
                   setIsFormOpen(true);
                 }}
                 onDelete={handleDeleteBook}
