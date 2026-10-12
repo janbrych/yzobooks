@@ -23,6 +23,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
 
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [isVideoReady, setIsVideoReady] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
 
@@ -32,10 +33,12 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       streamRef.current = null;
     }
     setStream(null);
+    setIsVideoReady(false);
   }, []);
 
   const startCamera = useCallback(async (isCancelled?: () => boolean) => {
     setCameraError(null);
+    setIsVideoReady(false);
     stopCamera();
 
     try {
@@ -86,6 +89,9 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
+      videoRef.current.play().catch((err) => {
+        console.warn('Video play error:', err);
+      });
     }
   }, [stream]);
 
@@ -96,6 +102,8 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
 
     const width = video.videoWidth || 640;
     const height = video.videoHeight || 480;
+
+    if (width <= 0 || height <= 0) return;
 
     canvas.width = width;
     canvas.height = height;
@@ -124,6 +132,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
   const handleClose = useCallback(() => {
     setCapturedImage(null);
     setCameraError(null);
+    setIsVideoReady(false);
     setIsAnalyzing(false);
     stopCamera();
     onClose();
@@ -201,6 +210,8 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
               ref={videoRef}
               autoPlay
               playsInline
+              onLoadedMetadata={() => setIsVideoReady(true)}
+              onCanPlay={() => setIsVideoReady(true)}
               className="w-full h-full object-cover"
             />
           ) : (
@@ -252,7 +263,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
               </label>
               <button
                 onClick={capturePhoto}
-                disabled={!stream}
+                disabled={!stream || !isVideoReady}
                 className="p-4 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 transition-transform active:scale-95 disabled:opacity-50"
               >
                 <Camera size={26} />

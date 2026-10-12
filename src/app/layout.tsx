@@ -4,10 +4,12 @@ import './globals.css';
 
 const inter = Inter({ subsets: ['latin', 'latin-ext'] });
 
+const basePath = process.env.BASE_PATH ?? '';
+
 export const metadata: Metadata = {
   title: 'Moje AI Knihovna',
   description: 'Aplikace pro snadnou evidenci knih pomocí vyfocení obálky.',
-  manifest: '/manifest.json',
+  manifest: `${basePath}/manifest.json`,
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
