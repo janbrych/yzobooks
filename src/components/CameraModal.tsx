@@ -19,57 +19,90 @@ interface CameraModalProps {
 export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
 
   const stopCamera = useCallback(() => {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-      setStream(null);
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
     }
-  }, [stream]);
+    setStream(null);
+  }, []);
 
-  const startCamera = useCallback(async () => {
+  const startCamera = useCallback(async (isCancelled?: () => boolean) => {
     setCameraError(null);
+    stopCamera();
+
     try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
-      setStream(mediaStream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
+      let mediaStream: MediaStream;
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+      } catch {
+        // Fallback constraint if environment facingMode or resolution fails
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
       }
+
+      if (isCancelled && isCancelled()) {
+        mediaStream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      streamRef.current = mediaStream;
+      setStream(mediaStream);
     } catch (err) {
+      if (isCancelled && isCancelled()) return;
       console.error('Camera access error:', err);
       setCameraError('Kamera není dostupná nebo byl odepřen přístup. Můžete vybrat fotografii ze souborů.');
     }
-  }, []);
+  }, [stopCamera]);
 
   useEffect(() => {
+    let cancelled = false;
+    const isCancelled = () => cancelled;
+
     if (isOpen && !capturedImage) {
-      startCamera();
+      startCamera(isCancelled);
     } else {
       stopCamera();
     }
+
     return () => {
+      cancelled = true;
       stopCamera();
     };
   }, [isOpen, capturedImage, startCamera, stopCamera]);
+
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
 
   const capturePhoto = () => {
     if (!videoRef.current || !canvasRef.current) return;
     const video = videoRef.current;
     const canvas = canvasRef.current;
 
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 480;
+
+    canvas.width = width;
+    canvas.height = height;
 
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, width, height);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
       setCapturedImage(dataUrl);
       stopCamera();

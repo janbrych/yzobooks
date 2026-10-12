@@ -131,13 +131,17 @@ export async function processImageOrQuery(input: { image?: string; query?: strin
   if (input.query) {
     extractedText = input.query;
   } else if (input.image) {
+    let worker;
     try {
-      const worker = await createWorker('ces+eng');
+      worker = await createWorker('ces+eng');
       const ret = await worker.recognize(input.image);
       extractedText = ret.data.text;
-      await worker.terminate();
     } catch (err) {
       console.error('Client OCR error:', err);
+    } finally {
+      if (worker) {
+        await worker.terminate().catch(console.error);
+      }
     }
   }
 
