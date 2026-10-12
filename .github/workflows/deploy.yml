@@ -36,6 +36,30 @@ jobs:
           BASE_PATH: "/yzobooks"
         run: npm run build
 
+      - name: Verify static export artifact
+        run: |
+          if [ ! -f ./out/index.html ]; then
+            echo "Error: ./out/index.html was not generated!"
+            exit 1
+          fi
+
+          if grep -q "Get started by editing" ./out/index.html; then
+            echo "Error: ./out/index.html contains default Next.js starter page content!"
+            exit 1
+          fi
+
+          if ! grep -q "Knihovna" ./out/index.html; then
+            echo "Error: ./out/index.html does not contain expected Yzobooks application content ('Knihovna')!"
+            exit 1
+          fi
+
+          if ! grep -q "/yzobooks/_next/" ./out/index.html; then
+            echo "Error: ./out/index.html does not use the expected base path '/yzobooks/_next/' for assets!"
+            exit 1
+          fi
+
+          echo "Static export artifact verified successfully!"
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
