@@ -19,48 +19,125 @@ interface CameraModalProps {
 export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const sessionIdRef = useRef<number>(0);
+
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [isVideoReady, setIsVideoReady] = useState(false);
 
-  const stopCamera = useCallback(() => {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-      setStream(null);
+  const stopCameraStream = useCallback(() => {
+    sessionIdRef.current += 1;
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
     }
-  }, [stream]);
-
-  const startCamera = useCallback(async () => {
-    setCameraError(null);
-    try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
-      setStream(mediaStream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-      }
-    } catch (err) {
-      console.error('Camera access error:', err);
-      setCameraError('Kamera není dostupná nebo byl odepřen přístup. Můžete vybrat fotografii ze souborů.');
-    }
+    setStream(null);
+    setIsVideoReady(false);
   }, []);
 
+  const startCameraStream = useCallback(async () => {
+    stopCameraStream();
+    const currentSession = sessionIdRef.current;
+    setCameraError(null);
+    setIsVideoReady(false);
+
+    try {
+      let mediaStream: MediaStream;
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+      } catch (err: unknown) {
+        if (currentSession !== sessionIdRef.current) return;
+        const error = err as { name?: string };
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+          throw err;
+        }
+        // Fallback to basic video constraint if camera resolution constraint failed
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
+      }
+
+      if (currentSession !== sessionIdRef.current) {
+        mediaStream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      streamRef.current = mediaStream;
+      setStream(mediaStream);
+    } catch (err: unknown) {
+      if (currentSession !== sessionIdRef.current) return;
+      console.error('Camera access error:', err);
+      const error = err as { name?: string };
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        setCameraError('Přístup ke kameře byl odepřen. Můžete vybrat fotografii ze souborů.');
+      } else {
+        setCameraError('Kamera není dostupná nebo se nepodařilo spustit náhled. Můžete vybrat fotografii ze souborů.');
+      }
+    }
+  }, [stopCameraStream]);
+
+  // Main camera lifecycle effect
   useEffect(() => {
     if (isOpen && !capturedImage) {
-      startCamera();
+      startCameraStream();
     } else {
-      stopCamera();
+      stopCameraStream();
     }
     return () => {
-      stopCamera();
+      stopCameraStream();
     };
-  }, [isOpen, capturedImage, startCamera, stopCamera]);
+  }, [isOpen, capturedImage, startCameraStream, stopCameraStream]);
+
+  // Handle stream binding to <video> element safely
+  useEffect(() => {
+    const videoEl = videoRef.current;
+    if (!videoEl || !stream) {
+      setIsVideoReady(false);
+      return;
+    }
+
+    let isSubscribed = true;
+    videoEl.srcObject = stream;
+
+    const handleLoadedMetadata = () => {
+      if (!isSubscribed) return;
+      videoEl
+        .play()
+        .then(() => {
+          if (isSubscribed) setIsVideoReady(true);
+        })
+        .catch((playErr) => {
+          console.error('Video play error:', playErr);
+          if (isSubscribed) {
+            setCameraError('Chyba při přehrávání videa z kamery.');
+          }
+        });
+    };
+
+    videoEl.addEventListener('loadedmetadata', handleLoadedMetadata);
+
+    if (videoEl.readyState >= 1) {
+      handleLoadedMetadata();
+    }
+
+    return () => {
+      isSubscribed = false;
+      videoEl.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      if (videoEl.srcObject === stream) {
+        videoEl.srcObject = null;
+      }
+    };
+  }, [stream]);
 
   const capturePhoto = () => {
-    if (!videoRef.current || !canvasRef.current) return;
+    if (!videoRef.current || !canvasRef.current || !isVideoReady) return;
     const video = videoRef.current;
     const canvas = canvasRef.current;
 
@@ -72,7 +149,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
       setCapturedImage(dataUrl);
-      stopCamera();
+      stopCameraStream();
     }
   };
 
@@ -82,7 +159,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       const reader = new FileReader();
       reader.onload = (event) => {
         setCapturedImage(event.target?.result as string);
-        stopCamera();
+        stopCameraStream();
       };
       reader.readAsDataURL(file);
     }
@@ -92,9 +169,15 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     setCapturedImage(null);
     setCameraError(null);
     setIsAnalyzing(false);
-    stopCamera();
+    stopCameraStream();
     onClose();
-  }, [onClose, stopCamera]);
+  }, [onClose, stopCameraStream]);
+
+  const handleRetake = () => {
+    setCapturedImage(null);
+    // Note: Do NOT call startCameraStream() here!
+    // Setting capturedImage to null triggers the effect above, which will cleanly call startCameraStream().
+  };
 
   const analyzeImage = async () => {
     if (!capturedImage) return;
@@ -194,10 +277,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
           {capturedImage ? (
             <>
               <button
-                onClick={() => {
-                  setCapturedImage(null);
-                  startCamera();
-                }}
+                onClick={handleRetake}
                 disabled={isAnalyzing}
                 className="flex-1 py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium text-sm flex items-center justify-center gap-2 transition-colors"
               >
@@ -219,7 +299,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
               </label>
               <button
                 onClick={capturePhoto}
-                disabled={!stream}
+                disabled={!stream || !isVideoReady}
                 className="p-4 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 transition-transform active:scale-95 disabled:opacity-50"
               >
                 <Camera size={26} />
