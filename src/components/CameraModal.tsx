@@ -247,12 +247,20 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
           {capturedImage ? (
             <img src={capturedImage} alt="Captured" className="w-full h-full object-cover" />
           ) : stream ? (
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              className="w-full h-full object-cover"
-            />
+            <>
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full object-cover"
+              />
+              {cameraError && (
+                <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-6 text-center">
+                  <p className="text-xs text-slate-300">{cameraError}</p>
+                </div>
+              )}
+            </>
           ) : (
             <div className="p-6 text-center flex flex-col items-center gap-3">
               <Camera size={48} className="text-slate-600 animate-pulse" />

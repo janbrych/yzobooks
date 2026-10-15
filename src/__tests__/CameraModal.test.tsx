@@ -349,4 +349,33 @@ describe('CameraModal Component Lifecycle & Regression Tests', () => {
       expect(handleClose).toHaveBeenCalled();
     });
   });
+
+  it('11. Displays cameraError overlay when video.play() fails during streaming', async () => {
+    const handleClose = vi.fn();
+    const handleRecognized = vi.fn();
+
+    // Mock play to reject
+    Object.defineProperty(HTMLMediaElement.prototype, 'play', {
+      writable: true,
+      configurable: true,
+      value: vi.fn().mockRejectedValue(new Error('Autoplay prevented')),
+    });
+
+    render(<CameraModal isOpen={true} onClose={handleClose} onRecognized={handleRecognized} />);
+
+    await waitFor(() => {
+      expect(getUserMediaMock).toHaveBeenCalledTimes(1);
+    });
+
+    const video = document.querySelector('video') as HTMLVideoElement;
+    expect(video).not.toBeNull();
+
+    await act(async () => {
+      fireEvent(video, new Event('loadedmetadata'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Chyba při přehrávání videa z kamery.')).toBeInTheDocument();
+    });
+  });
 });
