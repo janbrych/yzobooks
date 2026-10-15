@@ -136,6 +136,67 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     };
   }, [stream]);
 
+  const handleClose = useCallback(() => {
+    setCapturedImage(null);
+    setCameraError(null);
+    setIsAnalyzing(false);
+    stopCameraStream();
+    onClose();
+  }, [onClose, stopCameraStream]);
+
+  // Automatic micro-sequence scanning background loop
+  useEffect(() => {
+    if (!isOpen || !isVideoReady || capturedImage || isAnalyzing) return;
+
+    let isMounted = true;
+    let scanTimeout: NodeJS.Timeout | null = null;
+
+    const runMicroScan = async () => {
+      if (!isMounted || !videoRef.current || !canvasRef.current || !isVideoReady) return;
+
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+        try {
+          const clientResult = await processImageOrQuery({ image: dataUrl });
+          if (isMounted && clientResult && clientResult.result) {
+            const res = clientResult.result;
+            // Auto-trigger if valid ISBN or detailed match identified
+            if (res.isbn || (res.title && res.title !== 'Rozpoznaná kniha' && res.author)) {
+              onRecognized({
+                ...res,
+                coverUrl: res.coverUrl || dataUrl,
+              });
+              handleClose();
+              return;
+            }
+          }
+        } catch (err) {
+          console.error('Micro-scan error:', err);
+        }
+      }
+
+      if (isMounted) {
+        scanTimeout = setTimeout(runMicroScan, 1500);
+      }
+    };
+
+    scanTimeout = setTimeout(runMicroScan, 1000);
+
+    return () => {
+      isMounted = false;
+      if (scanTimeout) clearTimeout(scanTimeout);
+    };
+  }, [isOpen, isVideoReady, capturedImage, isAnalyzing, onRecognized, handleClose]);
+
   const capturePhoto = () => {
     if (!videoRef.current || !canvasRef.current || !isVideoReady) return;
     const video = videoRef.current;
@@ -164,14 +225,6 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       reader.readAsDataURL(file);
     }
   };
-
-  const handleClose = useCallback(() => {
-    setCapturedImage(null);
-    setCameraError(null);
-    setIsAnalyzing(false);
-    stopCameraStream();
-    onClose();
-  }, [onClose, stopCameraStream]);
 
   const handleRetake = () => {
     setCapturedImage(null);
@@ -253,11 +306,29 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
                 autoPlay
                 playsInline
                 muted
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover -scale-x-100"
+                style={{ transform: 'scaleX(-1)' }}
               />
-              {cameraError && (
+              {cameraError ? (
                 <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-6 text-center">
                   <p className="text-xs text-slate-300">{cameraError}</p>
+                </div>
+              ) : isVideoReady && (
+                <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-between p-6">
+                  <div className="w-full text-center bg-slate-900/60 backdrop-blur-md rounded-full py-1.5 px-3 text-xs text-indigo-300 font-medium border border-indigo-500/30 flex items-center justify-center gap-2 shadow-lg">
+                    <Sparkles size={14} className="animate-spin text-indigo-400" />
+                    <span>Automatické AI snímaní obálky / ISBN kódu...</span>
+                  </div>
+                  <div className="w-64 h-64 border-2 border-indigo-500/50 rounded-2xl relative flex items-center justify-center shadow-2xl">
+                    <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-indigo-400 -mt-1 -ml-1 rounded-tl"></div>
+                    <div className="absolute top-0 right-0 w-4 h-4 border-t-2 border-r-2 border-indigo-400 -mt-1 -mr-1 rounded-tr"></div>
+                    <div className="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2 border-indigo-400 -mb-1 -ml-1 rounded-bl"></div>
+                    <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-indigo-400 -mb-1 -mr-1 rounded-br"></div>
+                    <div className="w-full h-0.5 bg-gradient-to-r from-transparent via-indigo-500 to-transparent animate-pulse"></div>
+                  </div>
+                  <span className="text-[10px] text-slate-400 bg-slate-950/80 px-2 py-1 rounded-full">
+                    Ukažte knihu nebo ISBN kód před kameru
+                  </span>
                 </div>
               )}
             </>

@@ -378,4 +378,59 @@ describe('CameraModal Component Lifecycle & Regression Tests', () => {
       expect(screen.getByText('Chyba při přehrávání videa z kamery.')).toBeInTheDocument();
     });
   });
+
+  it('12. Video element renders with mirrored style transformation', async () => {
+    const handleClose = vi.fn();
+    const handleRecognized = vi.fn();
+
+    render(<CameraModal isOpen={true} onClose={handleClose} onRecognized={handleRecognized} />);
+
+    await waitFor(() => {
+      const video = document.querySelector('video') as HTMLVideoElement;
+      expect(video).not.toBeNull();
+      expect(video.style.transform).toBe('scaleX(-1)');
+    });
+  });
+
+  it('13. Automatic micro-sequence scanning automatically triggers recognition on valid ISBN detection', async () => {
+    const handleClose = vi.fn();
+    const handleRecognized = vi.fn();
+
+    vi.mocked(scanner.processImageOrQuery).mockResolvedValue({
+      result: {
+        title: 'Auto Detected Book',
+        author: 'Auto Author',
+        isbn: '9788020455555',
+        genre: '',
+        publisher: '',
+        publishedYear: '',
+        edition: '',
+        pageCount: null,
+        description: '',
+        coverUrl: 'http://example.com/cover.jpg',
+      },
+    });
+
+    render(<CameraModal isOpen={true} onClose={handleClose} onRecognized={handleRecognized} />);
+
+    const video = document.querySelector('video');
+    if (video) {
+      await act(async () => {
+        fireEvent(video, new Event('loadedmetadata'));
+      });
+    }
+
+    await waitFor(
+      () => {
+        expect(handleRecognized).toHaveBeenCalledWith(
+          expect.objectContaining({
+            isbn: '9788020455555',
+            title: 'Auto Detected Book',
+          })
+        );
+        expect(handleClose).toHaveBeenCalled();
+      },
+      { timeout: 3000 }
+    );
+  });
 });

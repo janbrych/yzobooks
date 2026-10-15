@@ -46,21 +46,75 @@ interface OpenLibraryDoc {
   cover_i?: number;
 }
 
-// Helper to extract ISBN digits from text
-export function extractISBN(text: string): string | null {
-  const isbn13Regex = /(?:ISBN(?:-13)?:?\s*)?(97[89][-\s]?[0-9]{1,5}[-\s]?[0-9]{1,7}[-\s]?[0-9]{1,7}[-\s]?[0-9])/gi;
-  const isbn10Regex = /(?:ISBN(?:-10)?:?\s*)?([0-9]{1,5}[-\s]?[0-9]{1,7}[-\s]?[0-9]{1,7}[-\s]?[0-9X])/gi;
+// Validate ISBN-10 checksum
+export function isValidISBN10(isbn: string): boolean {
+  const cleaned = isbn.replace(/[-\s]/g, '').toUpperCase();
+  if (cleaned.length !== 10) return false;
+  let sum = 0;
+  for (let i = 0; i < 9; i++) {
+    const digit = parseInt(cleaned[i], 10);
+    if (isNaN(digit)) return false;
+    sum += digit * (10 - i);
+  }
+  const last = cleaned[9];
+  if (last === 'X') {
+    sum += 10;
+  } else {
+    const digit = parseInt(last, 10);
+    if (isNaN(digit)) return false;
+    sum += digit;
+  }
+  return sum % 11 === 0;
+}
 
-  const match13 = isbn13Regex.exec(text);
-  if (match13) {
-    const cleaned = match13[1].replace(/[-\s]/g, '');
-    if (cleaned.length === 13) return cleaned;
+// Validate ISBN-13 checksum
+export function isValidISBN13(isbn: string): boolean {
+  const cleaned = isbn.replace(/[-\s]/g, '');
+  if (cleaned.length !== 13) return false;
+  let sum = 0;
+  for (let i = 0; i < 12; i++) {
+    const digit = parseInt(cleaned[i], 10);
+    if (isNaN(digit)) return false;
+    sum += digit * (i % 2 === 0 ? 1 : 3);
+  }
+  const checkDigit = (10 - (sum % 10)) % 10;
+  return checkDigit === parseInt(cleaned[12], 10);
+}
+
+// Check if string is a valid ISBN
+export function isValidISBN(isbn: string): boolean {
+  return isValidISBN13(isbn) || isValidISBN10(isbn);
+}
+
+// Helper to extract valid ISBN digits from text
+export function extractISBN(text: string): string | null {
+  if (!text) return null;
+
+  // Search for 13-digit candidate codes starting with 978 or 979
+  const isbn13Regex = /(?:ISBN(?:-13)?:?\s*)?(97[89][-\s]?[0-9]{1,5}[-\s]?[0-9]{1,7}[-\s]?[0-9]{1,7}[-\s]?[0-9])/gi;
+  let match: RegExpExecArray | null;
+  while ((match = isbn13Regex.exec(text)) !== null) {
+    const cleaned = match[1].replace(/[-\s]/g, '');
+    if (cleaned.length === 13 && isValidISBN13(cleaned)) {
+      return cleaned;
+    }
   }
 
-  const match10 = isbn10Regex.exec(text);
-  if (match10) {
-    const cleaned = match10[1].replace(/[-\s]/g, '');
-    if (cleaned.length === 10) return cleaned;
+  // Search for 10-digit candidate codes
+  const isbn10Regex = /(?:ISBN(?:-10)?:?\s*)?([0-9]{1,5}[-\s]?[0-9]{1,7}[-\s]?[0-9]{1,7}[-\s]?[0-9X])/gi;
+  while ((match = isbn10Regex.exec(text)) !== null) {
+    const cleaned = match[1].replace(/[-\s]/g, '').toUpperCase();
+    if (cleaned.length === 10 && isValidISBN10(cleaned)) {
+      return cleaned;
+    }
+  }
+
+  // Fallback: look for raw 13 digits starting with 978/979 anywhere
+  const raw13Matches = text.match(/\b(97[89][0-9]{10})\b/g);
+  if (raw13Matches) {
+    for (const raw of raw13Matches) {
+      if (isValidISBN13(raw)) return raw;
+    }
   }
 
   return null;
