@@ -27,6 +27,8 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isVideoReady, setIsVideoReady] = useState(false);
+  const [autoScanStatus, setAutoScanStatus] = useState<string>('Skenuji obálku a ISBN...');
+  const isScanningRef = useRef<boolean>(false);
 
   const stopCameraStream = useCallback(() => {
     sessionIdRef.current += 1;
@@ -136,6 +138,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     };
   }, [stream]);
 
+
   const capturePhoto = () => {
     if (!videoRef.current || !canvasRef.current || !isVideoReady) return;
     const video = videoRef.current;
@@ -172,6 +175,81 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     stopCameraStream();
     onClose();
   }, [onClose, stopCameraStream]);
+
+  // Continuous background auto-scanning logic
+  useEffect(() => {
+    if (!isOpen || capturedImage || !isVideoReady || !stream || isAnalyzing) {
+      return;
+    }
+
+    let isCancelled = false;
+    let scanTimeout: NodeJS.Timeout | null = null;
+
+    const performAutoScan = async () => {
+      if (isCancelled || isScanningRef.current || !videoRef.current || !canvasRef.current) {
+        return;
+      }
+
+      isScanningRef.current = true;
+      try {
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const frameData = canvas.toDataURL('image/jpeg', 0.8);
+
+          // Call API or local process for auto scanning frame
+          const res = await fetch('/api/books/recognize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: frameData }),
+          }).catch(() => null);
+
+          let autoResult = null;
+          if (res && res.ok) {
+            const data = await res.json();
+            if (data.result && (data.result.isbn || (data.result.title && data.result.title !== 'Neznámá kniha' && data.result.title !== 'Rozpoznaná kniha'))) {
+              autoResult = data.result;
+            }
+          }
+
+          if (!autoResult) {
+            const clientResult = await processImageOrQuery({ image: frameData });
+            if (clientResult && clientResult.result && (clientResult.result.isbn || (clientResult.result.title && clientResult.result.title !== 'Rozpoznaná kniha' && clientResult.result.title !== 'Neznámá kniha'))) {
+              autoResult = clientResult.result;
+            }
+          }
+
+          if (autoResult && !isCancelled) {
+            onRecognized({
+              ...autoResult,
+              coverUrl: autoResult.coverUrl || frameData,
+            });
+            handleClose();
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Auto scan iteration error:', err);
+      } finally {
+        isScanningRef.current = false;
+        if (!isCancelled) {
+          scanTimeout = setTimeout(performAutoScan, 2000);
+        }
+      }
+    };
+
+    scanTimeout = setTimeout(performAutoScan, 1500);
+
+    return () => {
+      isCancelled = true;
+      if (scanTimeout) clearTimeout(scanTimeout);
+    };
+  }, [isOpen, capturedImage, isVideoReady, stream, isAnalyzing, handleClose, onRecognized]);
 
   const handleRetake = () => {
     setCapturedImage(null);
@@ -253,8 +331,14 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
                 autoPlay
                 playsInline
                 muted
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover scale-x-[-1]"
               />
+              {!cameraError && (
+                <div className="absolute top-3 left-3 right-3 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50 flex items-center justify-center gap-2 text-xs text-indigo-300 animate-pulse pointer-events-none">
+                  <RefreshCw size={12} className="animate-spin text-indigo-400" />
+                  <span>{autoScanStatus}</span>
+                </div>
+              )}
               {cameraError && (
                 <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-6 text-center">
                   <p className="text-xs text-slate-300">{cameraError}</p>
