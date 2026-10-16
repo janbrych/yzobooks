@@ -46,22 +46,29 @@ interface OpenLibraryDoc {
   cover_i?: number;
 }
 
-// Helper to extract ISBN digits from text
+// Helper to extract and validate ISBN digits from text
 export function extractISBN(text: string): string | null {
-  const isbn13Regex = /(?:ISBN(?:-13)?:?\s*)?(97[89][-\s]?[0-9]{1,5}[-\s]?[0-9]{1,7}[-\s]?[0-9]{1,7}[-\s]?[0-9])/gi;
-  const isbn10Regex = /(?:ISBN(?:-10)?:?\s*)?([0-9]{1,5}[-\s]?[0-9]{1,7}[-\s]?[0-9]{1,7}[-\s]?[0-9X])/gi;
+  if (!text) return null;
 
-  const match13 = isbn13Regex.exec(text);
-  if (match13) {
-    const cleaned = match13[1].replace(/[-\s]/g, '');
+  // Search for 13-digit ISBN starting with 978 or 979
+  const isbn13Regex = /(?:ISBN(?:-13)?:?\s*)?(97[89][-\s]?[0-9]{1,5}[-\s]?[0-9]{1,7}[-\s]?[0-9]{1,7}[-\s]?[0-9])/gi;
+  let match;
+  while ((match = isbn13Regex.exec(text)) !== null) {
+    const cleaned = match[1].replace(/[-\s]/g, '');
     if (cleaned.length === 13) return cleaned;
   }
 
-  const match10 = isbn10Regex.exec(text);
-  if (match10) {
-    const cleaned = match10[1].replace(/[-\s]/g, '');
+  // Search for 10-digit ISBN
+  const isbn10Regex = /(?:ISBN(?:-10)?:?\s*)?([0-9]{1,5}[-\s]?[0-9]{1,7}[-\s]?[0-9]{1,7}[-\s]?[0-9X])/gi;
+  while ((match = isbn10Regex.exec(text)) !== null) {
+    const cleaned = match[1].replace(/[-\s]/g, '');
     if (cleaned.length === 10) return cleaned;
   }
+
+  // Raw digits fallback for barcode OCR output without spaces/dashes
+  const rawDigits = text.replace(/[^0-9X]/gi, '');
+  const rawMatch13 = rawDigits.match(/97[89][0-9]{10}/);
+  if (rawMatch13) return rawMatch13[0];
 
   return null;
 }

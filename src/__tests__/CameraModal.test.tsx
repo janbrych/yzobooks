@@ -174,7 +174,7 @@ describe('CameraModal Component Lifecycle & Regression Tests', () => {
     });
   });
 
-  it('4. The video element receives the stream after it is mounted', async () => {
+  it('4. The video element receives the stream after it is mounted and is horizontally mirrored', async () => {
     const handleClose = vi.fn();
     const handleRecognized = vi.fn();
 
@@ -184,7 +184,13 @@ describe('CameraModal Component Lifecycle & Regression Tests', () => {
       const video = document.querySelector('video') as HTMLVideoElement;
       expect(video).not.toBeNull();
       expect(video.srcObject).toBeInstanceOf(MockMediaStream);
+      expect(video.className).toContain('scale-x-[-1]');
     });
+  });
+
+  it('12. extractISBN parses ISBN-13 and raw digit strings', () => {
+    expect(scanner.extractISBN('Kniha s ISBN-13: 978-80-204-1234-5')).toBe('9788020412345');
+    expect(scanner.extractISBN('Kód bez pomlček 9788020412345 v textu')).toBe('9788020412345');
   });
 
   it('5. Capture is disabled until the video element is ready', async () => {
