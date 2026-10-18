@@ -27,7 +27,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isVideoReady, setIsVideoReady] = useState(false);
-  const [autoScanStatus, setAutoScanStatus] = useState<string>('Skenuji obálku a ISBN...');
+  const autoScanStatus = 'Skenuji obálku a ISBN...';
   const isScanningRef = useRef<boolean>(false);
 
   const stopCameraStream = useCallback(() => {
