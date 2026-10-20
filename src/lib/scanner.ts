@@ -73,6 +73,62 @@ export function extractISBN(text: string): string | null {
   return null;
 }
 
+// Direct search Knihovny.cz API
+export async function searchKnihovnyCz(isbn: string): Promise<BookSearchResult[]> {
+  try {
+    const cleanedIsbn = isbn.replace(/[^0-9X]/gi, '');
+    if (!cleanedIsbn) return [];
+
+    const res = await fetch(`https://www.knihovny.cz/api/v1/search?lookfor=${encodeURIComponent(cleanedIsbn)}&type=ISN`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return [];
+
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('json')) return [];
+
+    const data = await res.json();
+    if (!data || !data.records || !Array.isArray(data.records) || data.records.length === 0) {
+      return [];
+    }
+
+    return data.records.map((rec: Record<string, unknown>) => {
+      const authorsObj = rec.authors as { primary?: Record<string, unknown>; secondary?: Record<string, unknown> } | undefined;
+      const primaryAuthor = authorsObj?.primary ? Object.keys(authorsObj.primary)[0] || '' : '';
+      const secondaryAuthors = authorsObj?.secondary ? Object.keys(authorsObj.secondary) : [];
+      const author = [primaryAuthor, ...secondaryAuthors].filter(Boolean).join(', ');
+
+      const title = (rec.title || rec.cleanTitle || '') as string;
+      const publishers = rec.publishers;
+      const publisher = Array.isArray(publishers) ? publishers.join(', ') : ((publishers || '') as string);
+      const pubDates = rec.publicationDates;
+      const publishedYear = Array.isArray(pubDates) ? String(pubDates[0]) : pubDates ? String(pubDates) : '';
+      const subjects = rec.subjects;
+      const genre = Array.isArray(subjects) ? subjects.flat().slice(0, 3).join(', ') : '';
+      const summary = rec.summary;
+      const description = Array.isArray(summary) ? summary.join(' ') : ((summary || '') as string);
+      const isbns = rec.isbns;
+      const recIsbn = Array.isArray(isbns) ? String(isbns[0]) : cleanedIsbn;
+
+      return {
+        title,
+        author,
+        genre,
+        publisher,
+        publishedYear: publishedYear ? publishedYear.substring(0, 4) : '',
+        edition: '',
+        pageCount: null,
+        isbn: recIsbn || cleanedIsbn,
+        description,
+        coverUrl: `https://www.knihovny.cz/Cover/Show?isbn=${encodeURIComponent(cleanedIsbn)}&size=medium`,
+      };
+    });
+  } catch (err) {
+    console.error('Knihovny.cz API search error:', err);
+    return [];
+  }
+}
+
 // Direct search Google Books API
 export async function searchGoogleBooks(query: string): Promise<BookSearchResult[]> {
   try {
@@ -156,7 +212,10 @@ export async function processImageOrQuery(input: { image?: string; query?: strin
   let searchResults: BookSearchResult[] = [];
 
   if (isbn) {
-    searchResults = await searchGoogleBooks(`isbn:${isbn}`);
+    searchResults = await searchKnihovnyCz(isbn);
+    if (searchResults.length === 0) {
+      searchResults = await searchGoogleBooks(`isbn:${isbn}`);
+    }
     if (searchResults.length === 0) {
       searchResults = await searchOpenLibrary(isbn);
     }
