@@ -29,6 +29,16 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
+## Deployment (GitHub Pages)
+
+To ensure automatic deployment to GitHub Pages via GitHub Actions works properly:
+
+1. In your GitHub repository, go to **Settings** -> **Pages**.
+2. Under **Build and deployment** -> **Source**, select **GitHub Actions**.
+3. (Optional) In **Settings** -> **Environments** -> **github-pages**, check the **Deployment branches** rule:
+   - By default, the `deploy` job in `.github/workflows/deploy.yml` runs on `main`, `master`, or manual triggers (`workflow_dispatch`).
+   - On non-main branches (such as `feature/*`), the `build` job runs to verify static site export, but the `deploy` job is skipped by design to prevent non-production code from overwriting the live deployment.
+
 ## Deploy on Vercel
 
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
