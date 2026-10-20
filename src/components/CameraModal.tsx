@@ -2,7 +2,8 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, RefreshCw, X, Check, Sparkles } from 'lucide-react';
-import { processImageOrQuery, BookSearchResult } from '@/lib/scanner';
+import { processImageOrQuery, extractISBN, BookSearchResult } from '@/lib/scanner';
+import { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } from '@zxing/library';
 
 export interface BookData extends Partial<BookSearchResult> {
   id?: string;
@@ -27,7 +28,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isVideoReady, setIsVideoReady] = useState(false);
-  const autoScanStatus = 'Skenuji obálku a ISBN...';
+  const autoScanStatus = 'Skenuji čárový kód / obálku...';
   const isScanningRef = useRef<boolean>(false);
 
   const stopCameraStream = useCallback(() => {
@@ -202,7 +203,37 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
           const frameData = canvas.toDataURL('image/jpeg', 0.8);
 
-          // Call API or local process for auto scanning frame
+          // 1. Try real-time EAN-13 / barcode scanning first
+          try {
+            const hints = new Map();
+            hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+              BarcodeFormat.EAN_13,
+              BarcodeFormat.EAN_8,
+              BarcodeFormat.UPC_A,
+              BarcodeFormat.CODE_128,
+            ]);
+            const codeReader = new BrowserMultiFormatReader(hints);
+            const barcodeResult = codeReader.decodeFromCanvas(canvas);
+            const text = barcodeResult ? barcodeResult.getText() : '';
+            const isbn = extractISBN(text) || text;
+
+            if (isbn && isbn.length >= 9) {
+              const bookResult = await processImageOrQuery({ query: `isbn:${isbn}` });
+              if (bookResult && bookResult.result && !isCancelled) {
+                onRecognized({
+                  ...bookResult.result,
+                  isbn: bookResult.result.isbn || isbn,
+                  coverUrl: bookResult.result.coverUrl || frameData,
+                });
+                handleClose();
+                return;
+              }
+            }
+          } catch {
+            // No barcode detected in frame, fallback to OCR
+          }
+
+          // 2. Fallback to OCR auto scan if no barcode found
           const res = await fetch('/api/books/recognize', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -262,6 +293,53 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     setIsAnalyzing(true);
 
     try {
+      // Try barcode extraction on captured image first
+      if (canvasRef.current) {
+        try {
+          const img = new Image();
+          img.src = capturedImage;
+          await new Promise((resolve) => {
+            img.onload = resolve;
+            img.onerror = resolve;
+            setTimeout(resolve, 200);
+          });
+
+          const canvas = canvasRef.current;
+          canvas.width = img.width || 640;
+          canvas.height = img.height || 480;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            const hints = new Map();
+            hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+              BarcodeFormat.EAN_13,
+              BarcodeFormat.EAN_8,
+              BarcodeFormat.UPC_A,
+              BarcodeFormat.CODE_128,
+            ]);
+            const codeReader = new BrowserMultiFormatReader(hints);
+            const barcodeResult = codeReader.decodeFromCanvas(canvas);
+            const text = barcodeResult ? barcodeResult.getText() : '';
+            const isbn = extractISBN(text) || text;
+
+            if (isbn && isbn.length >= 9) {
+              const bookResult = await processImageOrQuery({ query: `isbn:${isbn}` });
+              if (bookResult && bookResult.result) {
+                onRecognized({
+                  ...bookResult.result,
+                  isbn: bookResult.result.isbn || isbn,
+                  coverUrl: bookResult.result.coverUrl || capturedImage,
+                });
+                handleClose();
+                return;
+              }
+            }
+          }
+        } catch {
+          // Barcode not found, continue to OCR / API evaluation
+        }
+      }
+
       // Try backend API first
       const res = await fetch('/api/books/recognize', {
         method: 'POST',
@@ -331,7 +409,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
                 autoPlay
                 playsInline
                 muted
-                className="w-full h-full object-cover scale-x-[-1]"
+                className="w-full h-full object-cover"
               />
               {!cameraError && (
                 <div className="absolute top-3 left-3 right-3 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50 flex items-center justify-center gap-2 text-xs text-indigo-300 animate-pulse pointer-events-none">

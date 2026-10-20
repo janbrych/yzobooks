@@ -174,7 +174,7 @@ describe('CameraModal Component Lifecycle & Regression Tests', () => {
     });
   });
 
-  it('4. The video element receives the stream after it is mounted and is horizontally mirrored', async () => {
+  it('4. The video element receives the stream after it is mounted and is not horizontally mirrored', async () => {
     const handleClose = vi.fn();
     const handleRecognized = vi.fn();
 
@@ -184,7 +184,7 @@ describe('CameraModal Component Lifecycle & Regression Tests', () => {
       const video = document.querySelector('video') as HTMLVideoElement;
       expect(video).not.toBeNull();
       expect(video.srcObject).toBeInstanceOf(MockMediaStream);
-      expect(video.className).toContain('scale-x-[-1]');
+      expect(video.className).not.toContain('scale-x-[-1]');
     });
   });
 
