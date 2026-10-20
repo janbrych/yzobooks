@@ -139,7 +139,6 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     };
   }, [stream]);
 
-
   const capturePhoto = () => {
     if (!videoRef.current || !canvasRef.current || !isVideoReady) return;
     const video = videoRef.current;
@@ -213,7 +212,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
               BarcodeFormat.CODE_128,
             ]);
             const codeReader = new BrowserMultiFormatReader(hints);
-            const barcodeResult = codeReader.decodeFromCanvas(canvas);
+            const barcodeResult = await codeReader.decodeFromImageElement(canvas as unknown as HTMLImageElement);
             const text = barcodeResult ? barcodeResult.getText() : '';
             const isbn = extractISBN(text) || text;
 
@@ -284,8 +283,6 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
 
   const handleRetake = () => {
     setCapturedImage(null);
-    // Note: Do NOT call startCameraStream() here!
-    // Setting capturedImage to null triggers the effect above, which will cleanly call startCameraStream().
   };
 
   const analyzeImage = async () => {
@@ -318,7 +315,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
               BarcodeFormat.CODE_128,
             ]);
             const codeReader = new BrowserMultiFormatReader(hints);
-            const barcodeResult = codeReader.decodeFromCanvas(canvas);
+            const barcodeResult = await codeReader.decodeFromImageElement(canvas as unknown as HTMLImageElement);
             const text = barcodeResult ? barcodeResult.getText() : '';
             const isbn = extractISBN(text) || text;
 
