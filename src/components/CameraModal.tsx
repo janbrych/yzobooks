@@ -3,7 +3,35 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, RefreshCw, X, Check, Sparkles } from 'lucide-react';
 import { processImageOrQuery, extractISBN, BookSearchResult } from '@/lib/scanner';
-import { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } from '@zxing/library';
+import {
+  MultiFormatReader,
+  BarcodeFormat,
+  DecodeHintType,
+  HTMLCanvasElementLuminanceSource,
+  HybridBinarizer,
+  BinaryBitmap,
+} from '@zxing/library';
+
+function decodeBarcodeFromCanvas(canvas: HTMLCanvasElement): string | null {
+  try {
+    const hints = new Map();
+    hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+      BarcodeFormat.EAN_13,
+      BarcodeFormat.EAN_8,
+      BarcodeFormat.UPC_A,
+      BarcodeFormat.CODE_128,
+    ]);
+    const luminanceSource = new HTMLCanvasElementLuminanceSource(canvas);
+    const binarizer = new HybridBinarizer(luminanceSource);
+    const binaryBitmap = new BinaryBitmap(binarizer);
+    const reader = new MultiFormatReader();
+    reader.setHints(hints);
+    const result = reader.decode(binaryBitmap);
+    return result ? result.getText() : null;
+  } catch {
+    return null;
+  }
+}
 
 export interface BookData extends Partial<BookSearchResult> {
   id?: string;
@@ -204,19 +232,9 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
           const frameData = canvas.toDataURL('image/jpeg', 0.8);
 
           // 1. Try real-time EAN-13 / barcode scanning first
-          try {
-            const hints = new Map();
-            hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-              BarcodeFormat.EAN_13,
-              BarcodeFormat.EAN_8,
-              BarcodeFormat.UPC_A,
-              BarcodeFormat.CODE_128,
-            ]);
-            const codeReader = new BrowserMultiFormatReader(hints);
-            const barcodeResult = codeReader.decodeFromCanvas(canvas);
-            const text = barcodeResult ? barcodeResult.getText() : '';
-            const isbn = extractISBN(text) || text;
-
+          const detectedText = decodeBarcodeFromCanvas(canvas);
+          if (detectedText) {
+            const isbn = extractISBN(detectedText) || detectedText;
             if (isbn && isbn.length >= 9) {
               const bookResult = await processImageOrQuery({ query: `isbn:${isbn}` });
               if (bookResult && bookResult.result && !isCancelled) {
@@ -229,8 +247,6 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
                 return;
               }
             }
-          } catch {
-            // No barcode detected in frame, fallback to OCR
           }
 
           // 2. Fallback to OCR auto scan if no barcode found
@@ -310,28 +326,20 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            const hints = new Map();
-            hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-              BarcodeFormat.EAN_13,
-              BarcodeFormat.EAN_8,
-              BarcodeFormat.UPC_A,
-              BarcodeFormat.CODE_128,
-            ]);
-            const codeReader = new BrowserMultiFormatReader(hints);
-            const barcodeResult = codeReader.decodeFromCanvas(canvas);
-            const text = barcodeResult ? barcodeResult.getText() : '';
-            const isbn = extractISBN(text) || text;
-
-            if (isbn && isbn.length >= 9) {
-              const bookResult = await processImageOrQuery({ query: `isbn:${isbn}` });
-              if (bookResult && bookResult.result) {
-                onRecognized({
-                  ...bookResult.result,
-                  isbn: bookResult.result.isbn || isbn,
-                  coverUrl: bookResult.result.coverUrl || capturedImage,
-                });
-                handleClose();
-                return;
+            const detectedText = decodeBarcodeFromCanvas(canvas);
+            if (detectedText) {
+              const isbn = extractISBN(detectedText) || detectedText;
+              if (isbn && isbn.length >= 9) {
+                const bookResult = await processImageOrQuery({ query: `isbn:${isbn}` });
+                if (bookResult && bookResult.result) {
+                  onRecognized({
+                    ...bookResult.result,
+                    isbn: bookResult.result.isbn || isbn,
+                    coverUrl: bookResult.result.coverUrl || capturedImage,
+                  });
+                  handleClose();
+                  return;
+                }
               }
             }
           }
