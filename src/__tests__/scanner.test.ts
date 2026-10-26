@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { searchKnihovnyCz, extractISBN, processImageOrQuery } from '@/lib/scanner';
+import {
+  searchKnihovnyCz,
+  extractISBN,
+  processImageOrQuery,
+  resolveBookFromText,
+  isValidISBN10,
+  isValidISBN13,
+  UNRECOGNIZED_TITLE,
+} from '@/lib/scanner';
 
 describe('scanner module unit tests', () => {
   beforeEach(() => {
@@ -102,5 +110,68 @@ describe('scanner module unit tests', () => {
     expect(extractISBN('ISBN 978-80-204-5550-5')).toBe('9788020455505');
     expect(extractISBN('ISBN 80-204-5550-X')).toBe('802045550X');
     expect(extractISBN('Žádný kód v textu')).toBeNull();
+  });
+
+  it('isValidISBN13 / isValidISBN10 validate checksums correctly', () => {
+    expect(isValidISBN13('9780316769488')).toBe(true);
+    expect(isValidISBN13('9780316769480')).toBe(false); // wrong check digit
+    expect(isValidISBN10('0316769487')).toBe(true);
+    expect(isValidISBN10('0316769480')).toBe(false);
+  });
+
+  it('extractISBN prefers a checksum-valid ISBN over invalid-looking digit noise earlier in the text', () => {
+    // "123456789" is not a valid ISBN-10 (bad checksum); the real ISBN-13
+    // later in the text should be picked instead of the first candidate found.
+    const text = 'Cena: 123456789 Kč\nISBN 978-0-316-76948-8';
+    expect(extractISBN(text)).toBe('9780316769488');
+  });
+
+  it('resolveBookFromText filters out numeric/barcode noise lines before building a search query', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const urlStr = String(url);
+      if (urlStr.includes('googleapis.com')) {
+        const parsed = new URL(urlStr);
+        expect(parsed.searchParams.get('q')).not.toMatch(/\d{3,}/); // no long digit runs leaked into the query
+        return {
+          ok: true,
+          json: async () => ({
+            items: [{ volumeInfo: { title: 'Dune', authors: ['Frank Herbert'] } }],
+          }),
+        } as Response;
+      }
+      return { ok: false } as Response;
+    });
+
+    const { result, confident } = await resolveBookFromText('123456789012\nDune\nFrank Herbert\n8,50 Kč');
+
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(confident).toBe(true);
+    expect(result.title).toBe('Dune');
+  });
+
+  it('resolveBookFromText returns confident:false with a clear placeholder title when nothing matches', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false } as Response);
+
+    const { result, confident } = await resolveBookFromText('', undefined);
+
+    expect(confident).toBe(false);
+    expect(result.title).toBe(UNRECOGNIZED_TITLE);
+  });
+
+  it('processImageOrQuery passes a direct text query straight through to resolveBookFromText', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      if (String(url).includes('knihovny.cz')) {
+        return {
+          ok: true,
+          headers: { get: () => 'application/json' } as unknown as Headers,
+          json: async () => ({ records: [{ title: 'Jáma a kyvadlo', authors: { primary: { 'Edgar Allan Poe': {} } }, isbns: ['9780316769488'] }] }),
+        } as Response;
+      }
+      return { ok: false } as Response;
+    });
+
+    const res = await processImageOrQuery({ query: 'isbn:9780316769488' });
+    expect(res.confident).toBe(true);
+    expect(res.result.title).toBe('Jáma a kyvadlo');
   });
 });

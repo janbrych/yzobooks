@@ -3,6 +3,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, RefreshCw, X, Check, Sparkles } from 'lucide-react';
 import { processImageOrQuery, extractISBN, BookSearchResult } from '@/lib/scanner';
+import { enhanceCanvasForOcr } from '@/lib/imagePreprocessing';
 import {
   MultiFormatReader,
   BarcodeFormat,
@@ -249,24 +250,28 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
             }
           }
 
-          // 2. Fallback to OCR auto scan if no barcode found
+          // 2. Fallback to OCR auto scan if no barcode found. OCR runs on a
+          // grayscale/contrast-enhanced copy of the frame (better text
+          // recognition); the cover thumbnail still uses the original color frame.
+          const ocrFrameData = enhanceCanvasForOcr(canvas);
+
           const res = await fetch('/api/books/recognize', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: frameData }),
+            body: JSON.stringify({ image: ocrFrameData }),
           }).catch(() => null);
 
           let autoResult = null;
           if (res && res.ok) {
             const data = await res.json();
-            if (data.result && (data.result.isbn || (data.result.title && data.result.title !== 'Neznámá kniha' && data.result.title !== 'Rozpoznaná kniha'))) {
+            if (data.result && data.confident) {
               autoResult = data.result;
             }
           }
 
           if (!autoResult) {
-            const clientResult = await processImageOrQuery({ image: frameData });
-            if (clientResult && clientResult.result && (clientResult.result.isbn || (clientResult.result.title && clientResult.result.title !== 'Rozpoznaná kniha' && clientResult.result.title !== 'Neznámá kniha'))) {
+            const clientResult = await processImageOrQuery({ image: ocrFrameData });
+            if (clientResult && clientResult.result && clientResult.confident) {
               autoResult = clientResult.result;
             }
           }
@@ -309,7 +314,9 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     setIsAnalyzing(true);
 
     try {
-      // Try barcode extraction on captured image first
+      // Draw the captured photo once, both for barcode decoding and (if that
+      // fails) to produce a grayscale/contrast-enhanced copy for OCR.
+      let ocrImage: string = capturedImage;
       if (canvasRef.current) {
         try {
           const img = new Image();
@@ -342,22 +349,27 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
                 }
               }
             }
+            // No barcode found — reuse the same drawn canvas to produce an
+            // OCR-enhanced version of the photo (better text recognition).
+            ocrImage = enhanceCanvasForOcr(canvas);
           }
         } catch {
-          // Barcode not found, continue to OCR / API evaluation
+          // Barcode/canvas step failed, continue to OCR / API evaluation with the original photo
         }
       }
 
-      // Try backend API first
+      // Try backend API first, but only accept a confident catalog match —
+      // otherwise fall through to the client-side path below, which tries
+      // additional sources (e.g. Knihovny.cz) before giving up.
       const res = await fetch('/api/books/recognize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: capturedImage }),
+        body: JSON.stringify({ image: ocrImage }),
       }).catch(() => null);
 
       if (res && res.ok) {
         const data = await res.json();
-        if (data.result) {
+        if (data.result && data.confident) {
           onRecognized({
             ...data.result,
             coverUrl: data.result.coverUrl || capturedImage,
@@ -367,14 +379,20 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
         }
       }
 
-      // Fallback to client-side recognition (for GitHub Pages / static export / server offline)
-      const clientResult = await processImageOrQuery({ image: capturedImage });
+      // Fallback to client-side recognition (for GitHub Pages / static export,
+      // server offline, or when the server call above found no confident match)
+      const clientResult = await processImageOrQuery({ image: ocrImage });
       if (clientResult && clientResult.result) {
         onRecognized({
           ...clientResult.result,
           coverUrl: clientResult.result.coverUrl || capturedImage,
         });
         handleClose();
+        if (!clientResult.confident) {
+          // Still no confident match anywhere — let the user know the form
+          // was pre-filled from raw OCR text and needs a manual check.
+          setTimeout(() => alert('Kniha nebyla jednoznačně rozpoznána. Zkontrolujte prosím a doplňte údaje ručně.'), 150);
+        }
       } else {
         alert('Nepodařilo se rozpoznat knihu z fotky.');
       }
