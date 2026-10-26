@@ -14,6 +14,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Modals
@@ -45,7 +46,7 @@ export default function Home() {
     try {
       const params = new URLSearchParams();
       if (filterStatus !== 'ALL') params.append('status', filterStatus);
-      if (searchQuery) params.append('search', searchQuery);
+      if (debouncedSearchQuery) params.append('search', debouncedSearchQuery);
 
       const res = await fetch(`/api/books?${params.toString()}`).catch(() => null);
       if (res && res.ok) {
@@ -59,8 +60,8 @@ export default function Home() {
       if (filterStatus !== 'ALL') {
         localItems = localItems.filter((b) => b.status === filterStatus);
       }
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
+      if (debouncedSearchQuery.trim()) {
+        const q = debouncedSearchQuery.toLowerCase();
         localItems = localItems.filter(
           (b) =>
             b.title.toLowerCase().includes(q) ||
@@ -73,11 +74,18 @@ export default function Home() {
     } catch (err) {
       console.error('Fetch books error:', err);
     }
-  }, [filterStatus, searchQuery]);
+  }, [filterStatus, debouncedSearchQuery]);
 
   useEffect(() => {
     checkUser();
   }, [checkUser]);
+
+  // Debounce the search box so typing doesn't fire a fetch (DB query or
+  // localStorage scan) on every keystroke.
+  useEffect(() => {
+    const timeout = setTimeout(() => setDebouncedSearchQuery(searchQuery), 300);
+    return () => clearTimeout(timeout);
+  }, [searchQuery]);
 
   useEffect(() => {
     if (user) {

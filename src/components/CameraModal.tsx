@@ -13,25 +13,76 @@ import {
   BinaryBitmap,
 } from '@zxing/library';
 
+// Reused across every scan iteration instead of allocating a fresh reader
+// (and hint map) on every single frame — this runs as often as every ~2s
+// during continuous auto-scanning.
+const barcodeHints = new Map();
+barcodeHints.set(DecodeHintType.POSSIBLE_FORMATS, [
+  BarcodeFormat.EAN_13,
+  BarcodeFormat.EAN_8,
+  BarcodeFormat.UPC_A,
+  BarcodeFormat.CODE_128,
+]);
+const barcodeReader = new MultiFormatReader();
+barcodeReader.setHints(barcodeHints);
+
 function decodeBarcodeFromCanvas(canvas: HTMLCanvasElement): string | null {
   try {
-    const hints = new Map();
-    hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-      BarcodeFormat.EAN_13,
-      BarcodeFormat.EAN_8,
-      BarcodeFormat.UPC_A,
-      BarcodeFormat.CODE_128,
-    ]);
     const luminanceSource = new HTMLCanvasElementLuminanceSource(canvas);
     const binarizer = new HybridBinarizer(luminanceSource);
     const binaryBitmap = new BinaryBitmap(binarizer);
-    const reader = new MultiFormatReader();
-    reader.setHints(hints);
-    const result = reader.decode(binaryBitmap);
+    const result = barcodeReader.decode(binaryBitmap);
     return result ? result.getText() : null;
   } catch {
     return null;
   }
+}
+
+// Photos picked from the file input can come straight off a phone's main
+// camera (often 10+ megapixels) with no resizing at all — that's a lot of
+// base64 payload to ship to the OCR endpoint and a lot of pixels for
+// Tesseract to churn through for no recognition benefit. Downscale to a
+// sane max dimension before it ever reaches the canvas/OCR/upload pipeline.
+const MAX_IMAGE_DIMENSION = 1600;
+
+function downscaleImageIfNeeded(dataUrl: string): Promise<string> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: string) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    // Guard against an image that never fires load/error (e.g. test
+    // environments without real image decoding) so this can never hang.
+    const timeout = setTimeout(() => finish(dataUrl), 300);
+
+    const img = new Image();
+    img.onload = () => {
+      clearTimeout(timeout);
+      const { width, height } = img;
+      const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(width, height));
+      if (!width || !height || scale >= 1) {
+        finish(dataUrl);
+        return;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(width * scale);
+      canvas.height = Math.round(height * scale);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        finish(dataUrl);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      finish(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => {
+      clearTimeout(timeout);
+      finish(dataUrl);
+    };
+    img.src = dataUrl;
+  });
 }
 
 export interface BookData extends Partial<BookSearchResult> {
@@ -190,8 +241,9 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (event) => {
-        setCapturedImage(event.target?.result as string);
+      reader.onload = async (event) => {
+        const rawDataUrl = event.target?.result as string;
+        setCapturedImage(await downscaleImageIfNeeded(rawDataUrl));
         stopCameraStream();
       };
       reader.readAsDataURL(file);

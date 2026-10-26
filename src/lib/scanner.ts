@@ -1,6 +1,30 @@
 // Client-side OCR and online book recognition utility for static / GitHub Pages support
 
-import { createWorker } from 'tesseract.js';
+import { createWorker, PSM, type Worker } from 'tesseract.js';
+
+// Re-creating and tearing down a Tesseract worker (which loads the language
+// model) on every single scan is the dominant cost of the recognition loop —
+// during continuous auto-scanning this happened every ~2 seconds. Keep one
+// worker alive for the lifetime of the page/session and reuse it for every
+// recognize() call instead.
+let workerPromise: Promise<Worker> | null = null;
+
+async function getOcrWorker(): Promise<Worker> {
+  if (!workerPromise) {
+    workerPromise = (async () => {
+      const worker = await createWorker('ces+eng');
+      // SPARSE_TEXT suits book covers much better than the default AUTO mode:
+      // cover text is scattered in blocks of varying size/orientation rather
+      // than one uniform paragraph.
+      await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
+      return worker;
+    })().catch((err) => {
+      workerPromise = null; // allow retrying on the next call if init failed
+      throw err;
+    });
+  }
+  return workerPromise;
+}
 
 export interface BookSearchResult {
   title: string;
@@ -339,17 +363,12 @@ export async function processImageOrQuery(input: {
   if (input.query) {
     extractedText = input.query;
   } else if (input.image) {
-    let worker;
     try {
-      worker = await createWorker('ces+eng');
+      const worker = await getOcrWorker();
       const ret = await worker.recognize(input.image);
       extractedText = ret.data.text;
     } catch (err) {
       console.error('Client OCR error:', err);
-    } finally {
-      if (worker) {
-        await worker.terminate().catch((err) => console.error('Worker terminate error:', err));
-      }
     }
   }
 
