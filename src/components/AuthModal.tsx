@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { BookOpen, LogIn, UserPlus } from 'lucide-react';
+import { Modal } from '@/components/Modal';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -16,8 +17,6 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
-  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,8 +49,8 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
-      <div className="relative w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl p-6 flex flex-col gap-5">
+    <Modal open={isOpen} onClose={onClose} label="Přihlášení" className="sm:max-w-sm">
+      <div className="p-6 pt-2 sm:pt-6 flex flex-col gap-5">
         <div className="flex flex-col items-center text-center gap-2">
           <div className="p-3 bg-indigo-600/10 border border-indigo-500/20 rounded-2xl text-indigo-400">
             <BookOpen size={28} />
@@ -130,6 +129,6 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

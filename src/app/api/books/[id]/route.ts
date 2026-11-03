@@ -45,7 +45,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 
   try {
     const body = await req.json();
-    const { title, author, genre, publisher, publishedYear, edition, pageCount, isbn, description, coverUrl, status, rating } = body;
+    const { title, author, genre, publisher, publishedYear, edition, pageCount, isbn, description, coverUrl, authorPhotoUrl, status, rating } = body;
 
     const existingBook = await prisma.book.findFirst({
       where: { id, userId: user.userId },
@@ -68,6 +68,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
         isbn: isbn ?? existingBook.isbn,
         description: description ?? existingBook.description,
         coverUrl: coverUrl ?? existingBook.coverUrl,
+        authorPhotoUrl: authorPhotoUrl ?? existingBook.authorPhotoUrl,
         status: status ?? existingBook.status,
         rating: rating !== undefined ? (rating ? parseInt(String(rating), 10) : null) : existingBook.rating,
       },

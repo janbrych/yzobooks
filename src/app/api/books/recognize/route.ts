@@ -1,90 +1,29 @@
 import { NextResponse } from 'next/server';
+import type { Worker } from 'tesseract.js';
 import { getCurrentUser } from '@/lib/auth';
+import { resolveBookFromText } from '@/lib/scanner';
 
 export const dynamic = 'force-static';
 
-// Helper to query Google Books API
-async function searchGoogleBooks(query: string) {
-  try {
-    const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=5`, {
-      headers: { 'User-Agent': 'KnihovnaApp/1.0' },
+// Reuse one Tesseract worker across requests in this server process instead
+// of spinning up (and tearing down) a fresh one — with its language model —
+// on every single recognize call. Falls back to re-creating it if a prior
+// init attempt failed.
+let serverWorkerPromise: Promise<Worker> | null = null;
+
+async function getServerOcrWorker(): Promise<Worker> {
+  if (!serverWorkerPromise) {
+    serverWorkerPromise = (async () => {
+      const { createWorker, PSM } = await import('tesseract.js');
+      const worker = await createWorker('ces+eng');
+      await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
+      return worker;
+    })().catch((err) => {
+      serverWorkerPromise = null;
+      throw err;
     });
-    if (!res.ok) return [];
-    const data = await res.json();
-    if (!data.items) return [];
-
-    return data.items.map((item: any) => {
-      const info = item.volumeInfo || {};
-      const industryIdentifiers = info.industryIdentifiers || [];
-      const isbnObj = industryIdentifiers.find((i: any) => i.type === 'ISBN_13') || industryIdentifiers.find((i: any) => i.type === 'ISBN_10');
-
-      return {
-        title: info.title || '',
-        author: info.authors ? info.authors.join(', ') : '',
-        genre: info.categories ? info.categories.join(', ') : '',
-        publisher: info.publisher || '',
-        publishedYear: info.publishedDate ? info.publishedDate.substring(0, 4) : '',
-        edition: info.publishedDate || '',
-        pageCount: info.pageCount || null,
-        isbn: isbnObj ? isbnObj.identifier : '',
-        description: info.description || '',
-        coverUrl: info.imageLinks ? (info.imageLinks.thumbnail || info.imageLinks.smallThumbnail)?.replace('http://', 'https://') : '',
-      };
-    });
-  } catch (err) {
-    console.error('Google Books API search error:', err);
-    return [];
   }
-}
-
-// Helper to query Open Library API
-async function searchOpenLibrary(query: string) {
-  try {
-    const res = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=5`);
-    if (!res.ok) return [];
-    const data = await res.json();
-    if (!data.docs) return [];
-
-    return data.docs.map((doc: any) => ({
-      title: doc.title || '',
-      author: doc.author_name ? doc.author_name.join(', ') : '',
-      genre: doc.subject ? doc.subject.slice(0, 3).join(', ') : '',
-      publisher: doc.publisher ? doc.publisher[0] : '',
-      publishedYear: doc.first_publish_year ? String(doc.first_publish_year) : doc.publish_year ? String(doc.publish_year[0]) : '',
-      edition: doc.edition_count ? `${doc.edition_count}. vydání / edice` : '',
-      pageCount: doc.number_of_pages_median || null,
-      isbn: doc.isbn ? doc.isbn[0] : '',
-      description: doc.first_sentence ? doc.first_sentence.join(' ') : '',
-      coverUrl: doc.cover_i ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg` : '',
-    }));
-  } catch (err) {
-    console.error('OpenLibrary API search error:', err);
-    return [];
-  }
-}
-
-// Extract ISBN digits from text
-function extractISBN(text: string): string | null {
-  if (!text) return null;
-
-  const isbn13Regex = /(?:ISBN(?:-13)?:?\s*)?(97[89][-\s]?[0-9]{1,5}[-\s]?[0-9]{1,7}[-\s]?[0-9]{1,7}[-\s]?[0-9])/gi;
-  let match;
-  while ((match = isbn13Regex.exec(text)) !== null) {
-    const cleaned = match[1].replace(/[-\s]/g, '');
-    if (cleaned.length === 13) return cleaned;
-  }
-
-  const isbn10Regex = /(?:ISBN(?:-10)?:?\s*)?([0-9]{1,5}[-\s]?[0-9]{1,7}[-\s]?[0-9]{1,7}[-\s]?[0-9X])/gi;
-  while ((match = isbn10Regex.exec(text)) !== null) {
-    const cleaned = match[1].replace(/[-\s]/g, '');
-    if (cleaned.length === 10) return cleaned;
-  }
-
-  const rawDigits = text.replace(/[^0-9X]/gi, '');
-  const rawMatch13 = rawDigits.match(/97[89][0-9]{10}/);
-  if (rawMatch13) return rawMatch13[0];
-
-  return null;
+  return serverWorkerPromise;
 }
 
 export async function POST(req: Request) {
@@ -102,11 +41,9 @@ export async function POST(req: Request) {
       extractedText = textQuery;
     } else if (image) {
       try {
-        const createWorker = (await import('tesseract.js')).createWorker;
-        const worker = await createWorker('ces+eng');
+        const worker = await getServerOcrWorker();
         const ret = await worker.recognize(image);
         extractedText = ret.data.text;
-        await worker.terminate();
       } catch (ocrErr) {
         console.error('Tesseract OCR error:', ocrErr);
       }
@@ -116,65 +53,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Nebyla poskytnuta žádná data k vyhodnocení.' }, { status: 400 });
     }
 
-    // Try extracting ISBN first
-    const isbn = extractISBN(extractedText);
-    let searchResults: any[] = [];
+    const { result, confident, rawText } = await resolveBookFromText(extractedText, image);
 
-    if (isbn) {
-      searchResults = await searchGoogleBooks(`isbn:${isbn}`);
-      if (searchResults.length === 0) {
-        searchResults = await searchOpenLibrary(isbn);
-      }
-    }
-
-    // If no results via ISBN, search by extracted text lines (e.g., Title/Author candidates)
-    if (searchResults.length === 0 && extractedText) {
-      const lines = extractedText
-        .split('\n')
-        .map((l) => l.trim())
-        .filter((l) => l.length > 2);
-
-      // Clean lines to create search query
-      const searchQuery = lines.slice(0, 4).join(' ');
-      if (searchQuery) {
-        searchResults = await searchGoogleBooks(searchQuery);
-        if (searchResults.length === 0) {
-          searchResults = await searchOpenLibrary(searchQuery);
-        }
-      }
-    }
-
-    // Best guess fallback if search found results
-    const bestMatch = searchResults.length > 0 ? searchResults[0] : null;
-
-    // If still no result, attempt AI extraction or format response with whatever OCR captured
-    if (!bestMatch) {
-      const lines = extractedText.split('\n').map((l) => l.trim()).filter(Boolean);
-      return NextResponse.json({
-        result: {
-          title: lines[0] || 'Neznámá kniha',
-          author: lines[1] || '',
-          genre: '',
-          publisher: '',
-          publishedYear: '',
-          edition: '',
-          pageCount: null,
-          isbn: isbn || '',
-          description: extractedText,
-          coverUrl: image || '',
-        },
-        rawText: extractedText,
-      });
-    }
-
-    return NextResponse.json({
-      result: {
-        ...bestMatch,
-        coverUrl: bestMatch.coverUrl || image || '',
-      },
-      candidates: searchResults,
-      rawText: extractedText,
-    });
+    return NextResponse.json({ result, confident, rawText });
   } catch (error) {
     console.error('Book recognize error:', error);
     return NextResponse.json({ error: 'Chyba při vyhodnocování knihy.' }, { status: 500 });

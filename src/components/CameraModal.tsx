@@ -2,7 +2,9 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, RefreshCw, X, Check, Sparkles } from 'lucide-react';
-import { processImageOrQuery, extractISBN, BookSearchResult } from '@/lib/scanner';
+import { processImageOrQuery, resolveBookFromBarcode, BookSearchResult, type BarcodeResolution } from '@/lib/scanner';
+import { enhanceCanvasForOcr } from '@/lib/imagePreprocessing';
+import { toast } from '@/lib/toast';
 import {
   MultiFormatReader,
   BarcodeFormat,
@@ -12,31 +14,107 @@ import {
   BinaryBitmap,
 } from '@zxing/library';
 
+// Reused across every scan iteration instead of allocating a fresh reader
+// (and hint map) on every single frame — this runs as often as every ~2s
+// during continuous auto-scanning.
+const barcodeHints = new Map();
+barcodeHints.set(DecodeHintType.POSSIBLE_FORMATS, [
+  BarcodeFormat.EAN_13,
+  BarcodeFormat.EAN_8,
+  BarcodeFormat.UPC_A,
+  BarcodeFormat.CODE_128,
+]);
+const barcodeReader = new MultiFormatReader();
+barcodeReader.setHints(barcodeHints);
+
 function decodeBarcodeFromCanvas(canvas: HTMLCanvasElement): string | null {
   try {
-    const hints = new Map();
-    hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-      BarcodeFormat.EAN_13,
-      BarcodeFormat.EAN_8,
-      BarcodeFormat.UPC_A,
-      BarcodeFormat.CODE_128,
-    ]);
     const luminanceSource = new HTMLCanvasElementLuminanceSource(canvas);
     const binarizer = new HybridBinarizer(luminanceSource);
     const binaryBitmap = new BinaryBitmap(binarizer);
-    const reader = new MultiFormatReader();
-    reader.setHints(hints);
-    const result = reader.decode(binaryBitmap);
+    const result = barcodeReader.decode(binaryBitmap);
     return result ? result.getText() : null;
   } catch {
     return null;
   }
 }
 
+// Photos picked from the file input can come straight off a phone's main
+// camera (often 10+ megapixels) with no resizing at all — that's a lot of
+// base64 payload to ship to the OCR endpoint and a lot of pixels for
+// Tesseract to churn through for no recognition benefit. Downscale to a
+// sane max dimension before it ever reaches the canvas/OCR/upload pipeline.
+const MAX_IMAGE_DIMENSION = 1600;
+
+function downscaleImageIfNeeded(dataUrl: string): Promise<string> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: string) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    // Guard against an image that never fires load/error (e.g. test
+    // environments without real image decoding) so this can never hang.
+    const timeout = setTimeout(() => finish(dataUrl), 300);
+
+    const img = new Image();
+    img.onload = () => {
+      clearTimeout(timeout);
+      const { width, height } = img;
+      const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(width, height));
+      if (!width || !height || scale >= 1) {
+        finish(dataUrl);
+        return;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(width * scale);
+      canvas.height = Math.round(height * scale);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        finish(dataUrl);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      finish(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => {
+      clearTimeout(timeout);
+      finish(dataUrl);
+    };
+    img.src = dataUrl;
+  });
+}
+
+const ANALYSIS_STEPS = [
+  'Hledám čárový kód…',
+  'Čtu text z obálky…',
+  'Prohledávám katalogy knihoven…',
+  'Porovnávám nalezené tituly…',
+  'Ještě chvilku…',
+];
+
 export interface BookData extends Partial<BookSearchResult> {
   id?: string;
   status?: string;
   rating?: number | null;
+  // Other catalog titles sharing the scanned code (box-set ISBNs), offered
+  // in the form so the user can pick the right one.
+  alternatives?: BookSearchResult[];
+  // Shown next to the ISBN field when the scan needs a manual check.
+  notice?: string;
+}
+
+// A barcode photo shows the back cover, so unlike an OCR'd front cover it is
+// never used as the book's cover image — the form looks one up instead.
+function barcodeToBookData(scanned: BarcodeResolution): BookData {
+  return {
+    ...scanned.result,
+    alternatives: scanned.alternatives,
+    notice: scanned.confident
+      ? undefined
+      : `Kód ${scanned.result.isbn} jsme v katalozích nenašli. Doplňte prosím údaje ručně.`,
+  };
 }
 
 interface CameraModalProps {
@@ -57,6 +135,16 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isVideoReady, setIsVideoReady] = useState(false);
   const autoScanStatus = 'Skenuji čárový kód / obálku...';
+  const [analysisStep, setAnalysisStep] = useState(0);
+
+  // Rotate the progress caption while a photo is analyzed — recognition can
+  // take several seconds and a static spinner reads as "stuck".
+  useEffect(() => {
+    if (!isAnalyzing) return;
+    setAnalysisStep(0);
+    const timer = setInterval(() => setAnalysisStep((s) => Math.min(s + 1, ANALYSIS_STEPS.length - 1)), 1600);
+    return () => clearInterval(timer);
+  }, [isAnalyzing]);
   const isScanningRef = useRef<boolean>(false);
 
   const stopCameraStream = useCallback(() => {
@@ -189,8 +277,9 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (event) => {
-        setCapturedImage(event.target?.result as string);
+      reader.onload = async (event) => {
+        const rawDataUrl = event.target?.result as string;
+        setCapturedImage(await downscaleImageIfNeeded(rawDataUrl));
         stopCameraStream();
       };
       reader.readAsDataURL(file);
@@ -233,40 +322,35 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
 
           // 1. Try real-time EAN-13 / barcode scanning first
           const detectedText = decodeBarcodeFromCanvas(canvas);
-          if (detectedText) {
-            const isbn = extractISBN(detectedText) || detectedText;
-            if (isbn && isbn.length >= 9) {
-              const bookResult = await processImageOrQuery({ query: `isbn:${isbn}` });
-              if (bookResult && bookResult.result && !isCancelled) {
-                onRecognized({
-                  ...bookResult.result,
-                  isbn: bookResult.result.isbn || isbn,
-                  coverUrl: bookResult.result.coverUrl || frameData,
-                });
-                handleClose();
-                return;
-              }
-            }
+          const scanned = detectedText ? await resolveBookFromBarcode(detectedText) : null;
+          if (scanned && !isCancelled) {
+            onRecognized(barcodeToBookData(scanned));
+            handleClose();
+            return;
           }
 
-          // 2. Fallback to OCR auto scan if no barcode found
+          // 2. Fallback to OCR auto scan if no barcode found. OCR runs on a
+          // grayscale/contrast-enhanced copy of the frame (better text
+          // recognition); the cover thumbnail still uses the original color frame.
+          const ocrFrameData = enhanceCanvasForOcr(canvas);
+
           const res = await fetch('/api/books/recognize', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: frameData }),
+            body: JSON.stringify({ image: ocrFrameData }),
           }).catch(() => null);
 
           let autoResult = null;
           if (res && res.ok) {
             const data = await res.json();
-            if (data.result && (data.result.isbn || (data.result.title && data.result.title !== 'Neznámá kniha' && data.result.title !== 'Rozpoznaná kniha'))) {
+            if (data.result && data.confident) {
               autoResult = data.result;
             }
           }
 
           if (!autoResult) {
-            const clientResult = await processImageOrQuery({ image: frameData });
-            if (clientResult && clientResult.result && (clientResult.result.isbn || (clientResult.result.title && clientResult.result.title !== 'Rozpoznaná kniha' && clientResult.result.title !== 'Neznámá kniha'))) {
+            const clientResult = await processImageOrQuery({ image: ocrFrameData });
+            if (clientResult && clientResult.result && clientResult.confident) {
               autoResult = clientResult.result;
             }
           }
@@ -309,7 +393,9 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     setIsAnalyzing(true);
 
     try {
-      // Try barcode extraction on captured image first
+      // Draw the captured photo once, both for barcode decoding and (if that
+      // fails) to produce a grayscale/contrast-enhanced copy for OCR.
+      let ocrImage: string = capturedImage;
       if (canvasRef.current) {
         try {
           const img = new Image();
@@ -327,37 +413,33 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
           if (ctx) {
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             const detectedText = decodeBarcodeFromCanvas(canvas);
-            if (detectedText) {
-              const isbn = extractISBN(detectedText) || detectedText;
-              if (isbn && isbn.length >= 9) {
-                const bookResult = await processImageOrQuery({ query: `isbn:${isbn}` });
-                if (bookResult && bookResult.result) {
-                  onRecognized({
-                    ...bookResult.result,
-                    isbn: bookResult.result.isbn || isbn,
-                    coverUrl: bookResult.result.coverUrl || capturedImage,
-                  });
-                  handleClose();
-                  return;
-                }
-              }
+            const scanned = detectedText ? await resolveBookFromBarcode(detectedText) : null;
+            if (scanned) {
+              onRecognized(barcodeToBookData(scanned));
+              handleClose();
+              return;
             }
+            // No barcode found — reuse the same drawn canvas to produce an
+            // OCR-enhanced version of the photo (better text recognition).
+            ocrImage = enhanceCanvasForOcr(canvas);
           }
         } catch {
-          // Barcode not found, continue to OCR / API evaluation
+          // Barcode/canvas step failed, continue to OCR / API evaluation with the original photo
         }
       }
 
-      // Try backend API first
+      // Try backend API first, but only accept a confident catalog match —
+      // otherwise fall through to the client-side path below, which tries
+      // additional sources (e.g. Knihovny.cz) before giving up.
       const res = await fetch('/api/books/recognize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: capturedImage }),
+        body: JSON.stringify({ image: ocrImage }),
       }).catch(() => null);
 
       if (res && res.ok) {
         const data = await res.json();
-        if (data.result) {
+        if (data.result && data.confident) {
           onRecognized({
             ...data.result,
             coverUrl: data.result.coverUrl || capturedImage,
@@ -367,20 +449,33 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
         }
       }
 
-      // Fallback to client-side recognition (for GitHub Pages / static export / server offline)
-      const clientResult = await processImageOrQuery({ image: capturedImage });
+      // Fallback to client-side recognition (for GitHub Pages / static export,
+      // server offline, or when the server call above found no confident match)
+      let clientResult = await processImageOrQuery({ image: ocrImage });
+      if (!clientResult.confident && ocrImage !== capturedImage) {
+        // The contrast enhancement helps most photos but wrecks some
+        // stylized covers (it lost "Malý" from "Malý princ") — give the
+        // untouched photo one more try before giving up.
+        const rawResult = await processImageOrQuery({ image: capturedImage });
+        if (rawResult.confident) clientResult = rawResult;
+      }
       if (clientResult && clientResult.result) {
         onRecognized({
           ...clientResult.result,
           coverUrl: clientResult.result.coverUrl || capturedImage,
         });
         handleClose();
+        if (!clientResult.confident) {
+          // Still no confident match anywhere — let the user know the form
+          // was pre-filled from raw OCR text and needs a manual check.
+          toast('Knihu se nepodařilo jednoznačně rozpoznat – zkontrolujte údaje nebo opište ISBN.', { tone: 'warning', duration: 5000 });
+        }
       } else {
-        alert('Nepodařilo se rozpoznat knihu z fotky.');
+        toast('Z fotky se nepodařilo knihu rozpoznat.', { tone: 'warning' });
       }
     } catch (err) {
       console.error('Analyze error:', err);
-      alert('Chyba při zpracování fotky.');
+      toast('Při zpracování fotky nastala chyba.', { tone: 'error' });
     } finally {
       setIsAnalyzing(false);
     }
@@ -389,8 +484,8 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-fadeIn">
-      <div className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/90 backdrop-blur-md animate-backdrop-in">
+      <div className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[100dvh] animate-sheet-in">
         {/* Header */}
         <div className="p-4 flex items-center justify-between border-b border-slate-800">
           <div className="flex items-center gap-2 text-indigo-400 font-semibold text-sm">
@@ -409,7 +504,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
         {/* Camera / Photo area */}
         <div className="relative aspect-[3/4] w-full bg-slate-950 flex items-center justify-center overflow-hidden">
           {capturedImage ? (
-            <img src={capturedImage} alt="Captured" className="w-full h-full object-cover" />
+            <img src={capturedImage} alt="Captured" className="w-full h-full object-cover animate-fadeIn" />
           ) : stream ? (
             <>
               <video
@@ -442,10 +537,24 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
 
           {/* AI Loader Overlay */}
           {isAnalyzing && (
-            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 text-center p-6">
-              <RefreshCw size={36} className="text-indigo-400 animate-spin" />
-              <span className="font-semibold text-slate-200 text-sm">AI analýza obálky a vyhledávání knihy...</span>
-              <p className="text-xs text-slate-400">Extrahuje se název, autor, ISBN a metadata.</p>
+            <div className="absolute inset-0 animate-fadeIn">
+              {/* tinted photo with a sweeping scan line */}
+              <div className="absolute inset-0 bg-indigo-950/45" />
+              <div
+                aria-hidden
+                className="absolute inset-x-[6%] h-0.5 rounded-full bg-indigo-300 shadow-[0_0_18px_4px_rgb(129_140_248/0.7)] animate-scan"
+              />
+              {/* corner brackets framing the cover */}
+              {['top-4 left-4 border-t-2 border-l-2', 'top-4 right-4 border-t-2 border-r-2', 'bottom-4 left-4 border-b-2 border-l-2', 'bottom-4 right-4 border-b-2 border-r-2'].map((c) => (
+                <span key={c} aria-hidden className={`absolute w-8 h-8 rounded-sm border-indigo-300/80 ${c}`} />
+              ))}
+              <div className="absolute inset-x-4 bottom-8 flex flex-col items-center gap-1.5 text-center">
+                <span className="inline-flex items-center gap-2 rounded-full bg-slate-950/80 backdrop-blur px-4 py-2 text-sm font-semibold text-slate-100 shadow-lg">
+                  <RefreshCw size={14} className="text-indigo-300 animate-spin" />
+                  <span key={analysisStep} className="animate-rise">{ANALYSIS_STEPS[analysisStep]}</span>
+                </span>
+                <span className="text-[11px] text-slate-300/90">AI analýza obálky a vyhledávání knihy</span>
+              </div>
             </div>
           )}
         </div>

@@ -12,6 +12,7 @@ export interface LocalBook {
   isbn: string;
   description: string;
   coverUrl: string;
+  authorPhotoUrl?: string;
   status: 'UNREAD' | 'READING' | 'READ';
   createdAt: string;
   updatedAt: string;
@@ -70,6 +71,7 @@ export function addOrUpdateLocalBook(bookData: Partial<LocalBook> & { id?: strin
     isbn: bookData.isbn || '',
     description: bookData.description || '',
     coverUrl: bookData.coverUrl || '',
+    authorPhotoUrl: bookData.authorPhotoUrl || '',
     status: bookData.status || 'UNREAD',
     createdAt: now,
     updatedAt: now,
