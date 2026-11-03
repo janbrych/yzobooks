@@ -514,18 +514,44 @@ function significantWords(text: string): string[] {
 // A text search always returns *something*; only trust a hit whose title
 // actually appears in what the camera read. Without this, OCR noise such as
 // "D sv. 13" was "confidently" recognized as Vergil's Aeneid.
+// Edit distance, capped: only "is it at most `max`?" matters here.
+function withinEditDistance(a: string, b: string, max: number): boolean {
+  if (Math.abs(a.length - b.length) > max) return false;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      row[j] = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    if (Math.min(...row) > max) return false;
+    prev = row;
+  }
+  return prev[b.length] <= max;
+}
+
+// The words OCR read, tolerant of single misread letters in longer words
+// ("nemaoc" still counts as "nemoc").
+function ocrWordSet(ocrText: string): { has: (word: string) => boolean } {
+  const words = new Set(significantWords(ocrText));
+  return {
+    has: (word) =>
+      words.has(word) ||
+      (word.length >= 5 && [...words].some((w) => withinEditDistance(w, word, word.length >= 8 ? 2 : 1))),
+  };
+}
+
 // How well a catalog hit explains the OCR text: matched title words count
 // most, a matching author breaks ties ("Malý princ" beats "Princ & princ").
 export function relevanceScore(result: BookSearchResult, ocrText: string): number {
   if (!isRelevantMatch(result, ocrText)) return 0;
-  const ocrWords = new Set(significantWords(ocrText));
+  const ocrWords = ocrWordSet(ocrText);
   const titleHits = significantWords(result.title).filter((w) => ocrWords.has(w)).length;
   const authorHits = significantWords(result.author).filter((w) => ocrWords.has(w)).length;
   return titleHits * 10 + Math.min(authorHits, 3) * 3;
 }
 
 export function isRelevantMatch(result: BookSearchResult, ocrText: string): boolean {
-  const ocrWords = new Set(significantWords(ocrText));
+  const ocrWords = ocrWordSet(ocrText);
   const coverage = (words: string[]) => words.filter((w) => ocrWords.has(w)).length / words.length;
 
   const mainTitle = significantWords(result.title.split(/[:/=]/)[0]);
@@ -569,16 +595,126 @@ function codeFromQuery(text: string): string | null {
   return validation?.valid && /^\s*(?:isbn:)?[\s0-9Xx-]+$/i.test(text) ? validation.code : null;
 }
 
+// One recognized text line and how tall its letters were on the photo.
+export interface OcrLine {
+  text: string;
+  height: number;
+}
+
+export interface CoverGuess {
+  title: string;
+  author: string;
+}
+
+const CZ_UPPER = 'ÁĚÍÉÓÚŮÝŽŠČŘĎŤŇ';
+const CZ_LOWER = 'áěíéóúůýžščřďťň';
+const NAME_WORD = new RegExp(`^(?:[A-Z${CZ_UPPER}][a-z${CZ_LOWER}'-]+|[A-Z${CZ_UPPER}]{2,}|[A-Z${CZ_UPPER}]\\.)$`);
+
+// "Terry Pratchett", "KAREL ČAPEK", "J. K. Rowling", "Pratchett & Gaiman"…:
+// every part is 2–4 capitalized words. Titles almost always contain a
+// lowercase word ("Bílá nemoc"), which keeps them out.
+// OCR leaves stray digits/letters next to names ("VIKTOR DYK £0").
+function stripStrayTokens(line: string): string {
+  return line
+    .split(/\s+/)
+    .filter((w) => !/^\d+$/.test(w) && (w.length > 1 || /^[a-z]$/.test(w)))
+    .join(' ');
+}
+
+export function looksLikePersonName(line: string): boolean {
+  const parts = stripStrayTokens(line)
+    .split(/\s*(?:,|&|\s+a\s+|\s+and\s+|\s+und\s+)\s*/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return false;
+  return parts.every((part) => {
+    const words = part.split(/\s+/);
+    return words.length >= 2 && words.length <= 4 && words.every((w) => NAME_WORD.test(w));
+  });
+}
+
+// Work out which text on a cover is the title and which the author. On a
+// cover the title is set in the biggest type, wherever it is — the author is
+// often printed *above* it, which made "first line = title" pick the author.
+// Without line sizes (typed queries) fall back to "a name-shaped line is the
+// author".
+export function guessCoverParts(lines: string[], layout?: OcrLine[]): CoverGuess {
+  const sized = (layout || [])
+    .map((l) => ({ text: cleanLines(l.text)[0] || '', height: l.height }))
+    .filter((l) => l.text && l.height > 0);
+
+  if (sized.length > 0) {
+    const tallest = Math.max(...sized.map((l) => l.height));
+    let titleLines = sized.filter((l) => l.height >= tallest * 0.8);
+    // An author name set bigger than the title (common on bestsellers): use
+    // the biggest line that is not a name as the title instead.
+    if (titleLines.every((l) => looksLikePersonName(l.text))) {
+      const others = sized.filter((l) => !looksLikePersonName(l.text) && l.height >= tallest * 0.45);
+      if (others.length === 0) {
+        // Only the author's name was legible: say so instead of searching
+        // for it as a title (which finds books *about* the author).
+        return { title: '', author: titleLines.map((l) => stripStrayTokens(l.text)).join(', ') };
+      }
+      const nextTallest = Math.max(...others.map((l) => l.height));
+      titleLines = others.filter((l) => l.height >= nextTallest * 0.8);
+    }
+    const title = titleLines.map((l) => l.text).join(' ');
+    const author = sized
+      .filter((l) => !titleLines.includes(l) && looksLikePersonName(l.text))
+      .map((l) => stripStrayTokens(l.text))
+      .join(', ');
+    return { title, author };
+  }
+
+  const nameIndex = lines.slice(0, 4).findIndex(looksLikePersonName);
+  const titleLine = lines.find((l, i) => i !== nameIndex && !looksLikePersonName(l)) || lines[0] || '';
+  return { title: titleLine, author: nameIndex >= 0 ? stripStrayTokens(lines[nameIndex]) : '' };
+}
+
+const mainTitle = (title: string) => title.split(/[:/=.]/)[0];
+const mainTitleWords = (title: string) => significantWords(mainTitle(title));
+
+// relevanceScore plus what the cover layout says: an exact title match and
+// the right author win; a record that merely *mentions* the author in its
+// title (a theatre programme "Karel Čapek: Bílá nemoc", an article) loses,
+// as do titles with extra words the cover doesn't have ("… CD 2").
+export function scoreCandidate(result: BookSearchResult, ocrText: string, guess?: CoverGuess): number {
+  let score = relevanceScore(result, ocrText);
+  if (score === 0) return 0;
+  const ocrWords = ocrWordSet(ocrText);
+
+  if (guess?.title && foldText(mainTitle(result.title)) === foldText(guess.title)) score += 25;
+  if (guess?.author) {
+    const authorWords = new Set(significantWords(guess.author));
+    const resultAuthor = significantWords(result.author);
+    const resultTitle = significantWords(result.title);
+    // Title words that are really the author's name on the cover don't show
+    // the title matches: "Karel Čapek" (a book about him) vs "Bílá nemoc".
+    const titleWordsFromAuthor = resultTitle.filter((w) => authorWords.has(w));
+    const titleWordsFromCover = mainTitleWords(result.title).filter((w) => !authorWords.has(w) && ocrWords.has(w));
+    if (titleWordsFromCover.length === 0) return 0;
+    score -= titleWordsFromAuthor.length * 10;
+    if (resultAuthor.some((w) => authorWords.has(w))) score += 15;
+    else if (titleWordsFromAuthor.length > 0) score -= 25;
+  }
+  if (result.isbn) score += 5;
+  const extraWords = significantWords(result.title).filter((w) => !ocrWords.has(w)).length;
+  score -= Math.min(extraWords, 5) * 2;
+  return Math.max(score, 1);
+}
+
 // Resolve a book from already-extracted OCR/typed text, trying ISBN lookups
 // first and falling back to progressively looser title/author text search.
 // Shared by both the server OCR route and the client-side OCR path so the
 // two never drift out of sync with each other again.
 export async function resolveBookFromText(
   extractedText: string,
-  imageFallback?: string
+  imageFallback?: string,
+  layout?: OcrLine[]
 ): Promise<{ result: BookSearchResult; confident: boolean; rawText: string; alternatives?: BookSearchResult[] }> {
   const isbn = extractISBN(extractedText) || codeFromQuery(extractedText);
   const lines = extractedText ? cleanLines(extractedText) : [];
+  const guess = lines.length > 0 ? guessCoverParts(lines, layout) : undefined;
 
   if (isbn) {
     const byCode = await lookupBooksByISBN(isbn);
@@ -592,16 +728,26 @@ export async function resolveBookFromText(
     }
   }
 
-  // Collect the best-scoring hit across queries and sources; stop early only
-  // once a hit explains the cover well (2+ title words plus the author).
+  // Search for the guessed title first (title index, so author interviews
+  // and reviews don't crowd it out), then the looser text queries. Collect the
+  // best-scoring hit; stop early once one explains the cover well.
+  type Search = (query: string) => Promise<BookSearchResult[]>;
+  const titleSearch: Search = (q) => searchKnihovnyCzText(q, { type: 'Title', limit: 10 });
+  const plan: Array<[string, Search[]]> = [];
+  if (guess?.title) plan.push([guess.title, [titleSearch]]);
+  if (guess?.title && guess.author) plan.push([`${guess.title} ${guess.author}`, [searchGoogleBooks, searchOpenLibrary]]);
+  for (const query of buildTextQueries(lines)) plan.push([query, [searchKnihovnyCzText, searchGoogleBooks, searchOpenLibrary]]);
+  // An exact title match (+25) on top of the title words is convincing.
+  const goodEnough = guess?.title ? 45 : 23;
+
   let best: { result: BookSearchResult; score: number } | null = null;
-  search: for (const query of buildTextQueries(lines)) {
-    for (const search of [searchKnihovnyCzText, searchGoogleBooks, searchOpenLibrary]) {
-      for (const candidate of await search(query)) {
-        const score = relevanceScore(candidate, extractedText);
+  search: for (const [query, searches] of plan) {
+    for (const run of searches) {
+      for (const candidate of await run(query)) {
+        const score = scoreCandidate(candidate, extractedText, guess);
         if (score > 0 && (!best || score > best.score)) best = { result: candidate, score };
       }
-      if (best && best.score >= 23) break search;
+      if (best && best.score >= goodEnough) break search;
     }
   }
 
@@ -621,8 +767,8 @@ export async function resolveBookFromText(
   // starting point for manual editing, clearly flagged via `confident: false`.
   return {
     result: {
-      title: lines[0] || UNRECOGNIZED_TITLE,
-      author: lines[1] || '',
+      title: guess?.title || UNRECOGNIZED_TITLE,
+      author: guess?.author || '',
       genre: '',
       publisher: '',
       publishedYear: '',
@@ -671,24 +817,36 @@ export async function resolveBookFromBarcode(text: string): Promise<BarcodeResol
   };
 }
 
+// Flatten Tesseract's block → paragraph → line tree into lines with their
+// letter height (bounding box), which guessCoverParts uses to find the title.
+export function ocrLinesFromBlocks(
+  blocks: Array<{ paragraphs: Array<{ lines: Array<{ text: string; bbox: { y0: number; y1: number } }> }> }> | null | undefined
+): OcrLine[] {
+  return (blocks || []).flatMap((b) =>
+    b.paragraphs.flatMap((p) => p.lines.map((l) => ({ text: l.text.trim(), height: l.bbox.y1 - l.bbox.y0 })))
+  );
+}
+
 // Perform client-side OCR on image string or process direct text query
 export async function processImageOrQuery(input: {
   image?: string;
   query?: string;
 }): Promise<{ result: BookSearchResult; confident: boolean; rawText?: string; alternatives?: BookSearchResult[] }> {
   let extractedText = '';
+  let layout: OcrLine[] | undefined;
 
   if (input.query) {
     extractedText = input.query;
   } else if (input.image) {
     try {
       const worker = await getOcrWorker();
-      const ret = await worker.recognize(input.image);
+      const ret = await worker.recognize(input.image, {}, { text: true, blocks: true });
       extractedText = ret.data.text;
+      layout = ocrLinesFromBlocks(ret.data.blocks);
     } catch (err) {
       console.error('Client OCR error:', err);
     }
   }
 
-  return resolveBookFromText(extractedText, input.image);
+  return resolveBookFromText(extractedText, input.image, layout);
 }

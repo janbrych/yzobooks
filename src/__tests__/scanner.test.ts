@@ -18,6 +18,10 @@ import {
   resolveBookFromBarcode,
   searchGoogleBooks,
   resetGoogleBooksBackoff,
+  looksLikePersonName,
+  guessCoverParts,
+  scoreCandidate,
+  ocrLinesFromBlocks,
   BookSearchResult,
 } from '@/lib/scanner';
 
@@ -446,5 +450,80 @@ describe('scanner module unit tests', () => {
     await searchGoogleBooks('Dune');
     await searchGoogleBooks('Malý princ');
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // --- Covers that print the author above the title ---
+
+  it('looksLikePersonName tells author lines from title lines', () => {
+    expect(looksLikePersonName('Terry Pratchett')).toBe(true);
+    expect(looksLikePersonName('KAREL ČAPEK')).toBe(true);
+    expect(looksLikePersonName('J. K. Rowling')).toBe(true);
+    expect(looksLikePersonName('Terry Pratchett & Neil Gaiman')).toBe(true);
+    expect(looksLikePersonName('VIKTOR DYK 0')).toBe(true); // stray OCR digit
+    expect(looksLikePersonName('Bílá nemoc')).toBe(false);
+    expect(looksLikePersonName('Harry Potter a Kámen mudrců')).toBe(false);
+    expect(looksLikePersonName('Saturnin')).toBe(false);
+  });
+
+  it('guessCoverParts takes the biggest type as the title even when the author is printed first', () => {
+    const layout = [
+      { text: 'Terry Pratchett', height: 34 },
+      { text: 'Neil Gaiman', height: 34 },
+      { text: 'Dobrá', height: 96 },
+      { text: 'znamení', height: 92 },
+      { text: 'TALPRESS', height: 24 },
+    ];
+    expect(guessCoverParts([], layout)).toEqual({ title: 'Dobrá znamení', author: 'Terry Pratchett, Neil Gaiman' });
+  });
+
+  it('guessCoverParts skips an author name set bigger than the title', () => {
+    const layout = [
+      { text: 'STEPHEN KING', height: 120 },
+      { text: 'Osvícení', height: 80 },
+    ];
+    expect(guessCoverParts([], layout)).toEqual({ title: 'Osvícení', author: 'STEPHEN KING' });
+  });
+
+  it('guessCoverParts reports an author-only cover instead of using the name as a title', () => {
+    expect(guessCoverParts([], [{ text: 'FRANK HERBERT', height: 60 }])).toEqual({ title: '', author: 'FRANK HERBERT' });
+  });
+
+  it('guessCoverParts without line sizes treats a leading name line as the author', () => {
+    expect(guessCoverParts(['Zdeněk Jirotka', 'Saturnin'])).toEqual({ title: 'Saturnin', author: 'Zdeněk Jirotka' });
+  });
+
+  it('scoreCandidate prefers the real book over records about its author or other editions', () => {
+    const ocr = 'KAREL ČAPEK\nBila nemaoc';
+    const guess = { title: 'Bila nemaoc', author: 'KAREL ČAPEK' };
+    const real = { ...book('Bílá nemoc', 'Karel Čapek'), isbn: '9788074832086' };
+    const programme = book('Karel Čapek: Bílá nemoc : [program]', 'Jiří Novák');
+    const aboutAuthor = book('Karel Čapek', 'Karel Čapek');
+    expect(scoreCandidate(real, ocr, guess)).toBeGreaterThan(scoreCandidate(programme, ocr, guess));
+    expect(scoreCandidate(aboutAuthor, ocr, guess)).toBe(0);
+  });
+
+  it('scoreCandidate tolerates a single misread letter ("nemaoc")', () => {
+    expect(scoreCandidate(book('Bílá nemoc', 'Karel Čapek'), 'KAREL ČAPEK Bila nemaoc')).toBeGreaterThan(0);
+  });
+
+  it('resolveBookFromText uses the cover layout and falls back to title/author in the right fields', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false } as Response);
+    const text = 'Terry Pratchett\nNeil Gaiman\nDobrá\nznamení';
+    const layout = [
+      { text: 'Terry Pratchett', height: 34 },
+      { text: 'Neil Gaiman', height: 34 },
+      { text: 'Dobrá', height: 96 },
+      { text: 'znamení', height: 92 },
+    ];
+    const { result, confident } = await resolveBookFromText(text, undefined, layout);
+    expect(confident).toBe(false);
+    expect(result.title).toBe('Dobrá znamení');
+    expect(result.author).toBe('Terry Pratchett, Neil Gaiman');
+  });
+
+  it('ocrLinesFromBlocks flattens Tesseract blocks into lines with their height', () => {
+    const blocks = [{ paragraphs: [{ lines: [{ text: ' Saturnin\n', bbox: { y0: 10, y1: 130 } }] }] }];
+    expect(ocrLinesFromBlocks(blocks)).toEqual([{ text: 'Saturnin', height: 120 }]);
+    expect(ocrLinesFromBlocks(null)).toEqual([]);
   });
 });
