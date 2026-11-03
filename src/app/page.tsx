@@ -8,6 +8,7 @@ import { BookFormModal, BookFormData, BookFormInitialData } from '@/components/B
 import { AuthModal } from '@/components/AuthModal';
 import { Toaster } from '@/components/Toaster';
 import { toast } from '@/lib/toast';
+import { findCoverForBook } from '@/lib/bookMedia';
 import { getLocalBooks, addOrUpdateLocalBook, deleteLocalBook, LocalBook } from '@/lib/localStorage';
 
 type Filter = 'ALL' | 'READING' | 'UNREAD' | 'READ' | 'NOT_READ';
@@ -34,6 +35,48 @@ function matchesSearch(book: LocalBook, query: string): boolean {
   return [book.title, book.author, book.genre, book.publisher, book.isbn].some((v) => (v || '').toLowerCase().includes(q));
 }
 
+// Standing books on the shelf (x, width, height, color); the shelf top is y = 80.
+const SHELF_BOOKS = [
+  { x: 20, w: 14, h: 58, color: '#6366f1' },
+  { x: 36, w: 18, h: 68, color: '#c026d3' },
+  { x: 56, w: 12, h: 50, color: '#10b981' },
+  { x: 70, w: 16, h: 62, color: '#0ea5e9' },
+];
+// The leaning book pivots on its bottom-left corner. At 15° its top-left
+// corner shifts left by 56·sin(15°) ≈ 14.5, so starting 15 units right of
+// the last standing book (x = 86) it rests against it without overlapping.
+const LEAN = { x: 101, w: 13, h: 56, angle: -15, color: '#f59e0b' };
+
+function EmptyShelfIllustration() {
+  const rise = (i: number) => ({ animationDelay: `${i * 90}ms`, transformBox: 'fill-box' as const, transformOrigin: 'bottom' });
+  return (
+    <svg aria-hidden viewBox="0 0 170 90" className="w-44 h-auto overflow-visible">
+      {SHELF_BOOKS.map((b, i) => (
+        <g key={b.x} className="animate-card-in" style={rise(i)}>
+          <rect x={b.x} y={80 - b.h} width={b.w} height={b.h} rx={2} fill={b.color} fillOpacity={0.85} />
+          <rect x={b.x} y={80 - b.h + 8} width={b.w} height={3} fill="white" fillOpacity={0.35} />
+          <rect x={b.x} y={74} width={b.w} height={2} fill="white" fillOpacity={0.25} />
+        </g>
+      ))}
+      <g className="animate-card-in" style={rise(SHELF_BOOKS.length)}>
+        <g transform={`rotate(${LEAN.angle} ${LEAN.x} 80)`}>
+          <rect x={LEAN.x} y={80 - LEAN.h} width={LEAN.w} height={LEAN.h} rx={2} fill={LEAN.color} fillOpacity={0.85} />
+          <rect x={LEAN.x} y={80 - LEAN.h + 8} width={LEAN.w} height={3} fill="white" fillOpacity={0.35} />
+        </g>
+      </g>
+      {/* two books lying flat */}
+      <g className="animate-card-in" style={rise(SHELF_BOOKS.length + 1)}>
+        <rect x={120} y={71} width={36} height={9} rx={2} fill="#f43f5e" fillOpacity={0.8} />
+        <rect x={124} y={62} width={28} height={9} rx={2} fill="#14b8a6" fillOpacity={0.8} />
+        <rect x={150} y={71} width={2} height={9} fill="white" fillOpacity={0.3} />
+      </g>
+      {/* the shelf board */}
+      <rect x={8} y={80} width={154} height={5} rx={2.5} fill="#475569" />
+      <rect x={14} y={85} width={142} height={3} rx={1.5} fill="#1e293b" />
+    </svg>
+  );
+}
+
 export default function Home() {
   const [user, setUser] = useState<{ id: string; email: string } | null>(null);
   // The whole library; filters and search run client-side so switching them
@@ -49,6 +92,10 @@ export default function Home() {
   // Books removed from view but not yet deleted, so "Vrátit" can bring them back.
   const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set());
   const deleteTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  // Books whose cover was already looked up this session, and the queue that
+  // runs those lookups one at a time (a big shelf shouldn't fire dozens at once).
+  const coverRepairs = useRef(new Set<string>());
+  const coverRepairQueue = useRef<Promise<void>>(Promise.resolve());
 
   // Modals
   const [isCameraOpen, setIsCameraOpen] = useState(false);
@@ -115,7 +162,6 @@ export default function Home() {
     () => shelf.filter((b) => matchesFilter(b, filterStatus) && matchesSearch(b, deferredSearch)),
     [shelf, filterStatus, deferredSearch]
   );
-  const readPercent = counts.ALL ? Math.round((counts.READ / counts.ALL) * 100) : 0;
 
   const handleLogout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
@@ -191,10 +237,7 @@ export default function Home() {
     setBooks((prev) => prev.map((b) => (b.id === book.id ? { ...b, status } : b)));
 
     if (status === 'READ') {
-      const readNow = counts.READ + 1;
-      toast(`Přečteno! Už máte ${readNow} z ${counts.ALL} ${readNow === counts.ALL ? '– celá knihovna 🎉' : ''}`.trim(), {
-        tone: 'success',
-      });
+      toast(`„${book.title}“ – přečteno`, { tone: 'success' });
     }
 
     const res = await fetch(`/api/books/${book.id}`, {
@@ -207,6 +250,29 @@ export default function Home() {
     }
     fetchBooks();
   };
+
+  // A card showing the generated title-only cover reports it here: books saved
+  // before their cover lookup finished, typed in by hand, or whose cover link
+  // died. Find a real cover and store it, so the shelf shows covers, not names.
+  const handleCoverUnavailable = useCallback((book: Book) => {
+    if (coverRepairs.current.has(book.id)) return;
+    coverRepairs.current.add(book.id);
+    coverRepairQueue.current = coverRepairQueue.current
+      .then(async () => {
+        const coverUrl = await findCoverForBook(book);
+        if (!coverUrl || coverUrl === book.coverUrl) return;
+        setBooks((prev) => prev.map((b) => (b.id === book.id ? { ...b, coverUrl } : b)));
+        const res = await fetch(`/api/books/${book.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ coverUrl }),
+        }).catch(() => null);
+        if ((!res || !res.ok) && getLocalBooks().some((b) => b.id === book.id)) {
+          addOrUpdateLocalBook({ id: book.id, coverUrl });
+        }
+      })
+      .catch((err) => console.warn('Cover lookup failed:', err));
+  }, []);
 
   const commitDelete = async (id: string) => {
     deleteTimers.current.delete(id);
@@ -311,34 +377,9 @@ export default function Home() {
 
       {/* Main Content */}
       <main className="relative flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-5">
-        {user && counts.ALL > 0 && (
-          <section aria-label="Přehled čtení" className="flex items-center gap-4 rounded-2xl bg-slate-900/60 border border-slate-800/80 px-4 py-3 animate-rise">
-            <div className="flex-1 min-w-0">
-              <p className="text-sm text-slate-200">
-                <span className="font-bold text-white">{counts.READ}</span> z {counts.ALL} přečteno
-                {counts.READING > 0 && <span className="text-slate-400"> · {counts.READING} právě čtete</span>}
-              </p>
-              <div
-                role="progressbar"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={readPercent}
-                aria-label="Přečteno z knihovny"
-                className="mt-2 h-1.5 rounded-full bg-slate-800 overflow-hidden"
-              >
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-emerald-400 transition-[width] duration-700 ease-out"
-                  style={{ width: `${readPercent}%` }}
-                />
-              </div>
-            </div>
-            <span className="text-2xl font-bold tabular-nums text-white">{readPercent}%</span>
-          </section>
-        )}
-
-        {/* Search and Filters */}
-        <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
-          <div className="relative flex-1">
+        {/* Side by side only when the five counted filter chips leave the search box room */}
+        <div className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
+          <div className="relative flex-1 lg:min-w-64">
             <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
             <input
               type="search"
@@ -358,7 +399,7 @@ export default function Home() {
             )}
           </div>
 
-          <div role="tablist" aria-label="Filtr podle stavu" className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none -mx-4 px-4 sm:mx-0 sm:px-0">
+          <div role="tablist" aria-label="Filtr podle stavu" className="flex items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0 scrollbar-none -mx-4 px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0">
             {FILTERS.map((st) => {
               const active = filterStatus === st.id;
               return (
@@ -414,12 +455,7 @@ export default function Home() {
           </div>
         ) : shelf.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-14 text-center gap-4 bg-slate-900/30 border border-dashed border-slate-700/70 rounded-3xl p-8 animate-rise">
-            {/* A tiny illustrated empty shelf */}
-            <div aria-hidden className="flex items-end gap-1.5 h-20">
-              {['h-14 bg-indigo-500/70', 'h-20 bg-fuchsia-500/60', 'h-16 bg-emerald-500/60', 'h-12 bg-amber-500/60 -rotate-12 origin-bottom-left'].map((c, i) => (
-                <span key={i} className={`w-5 rounded-sm ${c} animate-card-in`} style={{ animationDelay: `${i * 90}ms` }} />
-              ))}
-            </div>
+            <EmptyShelfIllustration />
             <h3 className="font-semibold text-slate-200">Vaše police je zatím prázdná</h3>
             <p className="text-xs text-slate-400 max-w-xs">
               Vyfoťte obálku nebo čárový kód a kniha se doplní sama — včetně obálky a fotky autora.
@@ -461,6 +497,7 @@ export default function Home() {
                 }}
                 onDelete={handleDeleteBook}
                 onSetStatus={handleSetStatus}
+                onCoverUnavailable={handleCoverUnavailable}
               />
             ))}
           </div>

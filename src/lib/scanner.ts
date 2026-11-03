@@ -295,9 +295,12 @@ export async function searchKnihovnyCz(isbn: string): Promise<BookSearchResult[]
 
 // Free-text Knihovny.cz search — the best source for Czech titles recognized
 // from a cover photo.
-export async function searchKnihovnyCzText(query: string): Promise<BookSearchResult[]> {
+export async function searchKnihovnyCzText(
+  query: string,
+  { type = 'AllFields', limit = 5 }: { type?: 'AllFields' | 'Title'; limit?: number } = {}
+): Promise<BookSearchResult[]> {
   if (!query.trim()) return [];
-  const records = await fetchKnihovnyRecords(knihovnyUrl(query, 'AllFields', 5));
+  const records = await fetchKnihovnyRecords(knihovnyUrl(query, type, limit));
   return records.map((rec) => mapKnihovnyRecord(rec, ''));
 }
 

@@ -32,6 +32,7 @@ interface BookCardProps {
   onEdit: (book: Book) => void;
   onDelete: (id: string) => void;
   onSetStatus: (book: Book, status: BookStatus) => void;
+  onCoverUnavailable?: (book: Book) => void;
 }
 
 const STATUS_OPTIONS: { id: BookStatus; label: string; icon: typeof Bookmark; active: string }[] = [
@@ -42,7 +43,7 @@ const STATUS_OPTIONS: { id: BookStatus; label: string; icon: typeof Bookmark; ac
 
 const DELETE_WIDTH = 84;
 
-export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelete, onSetStatus }: BookCardProps) {
+export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelete, onSetStatus, onCoverUnavailable }: BookCardProps) {
   const [showDetail, setShowDetail] = useState(false);
   const [showFullDescription, setShowFullDescription] = useState(false);
   const [translateX, setTranslateX] = useState(0);
@@ -130,9 +131,13 @@ export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelet
             else setShowDetail(true);
           }}
           style={{ transform: translateX ? `translateX(${translateX}px)` : undefined }}
-          className={`group relative z-10 h-full bg-slate-900 border border-slate-800/80 rounded-2xl p-2.5 flex flex-col gap-2.5 cursor-pointer shadow-lg shadow-black/20 hover:border-slate-600 hover:-translate-y-1 hover:shadow-xl hover:shadow-indigo-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
-            dragging ? '' : 'transition-all duration-300 ease-out'
-          }`}
+          // Read books get a quiet green tint — enough to scan the shelf by,
+          // not loud enough to compete with the covers.
+          className={`group relative z-10 h-full border rounded-2xl p-2.5 flex flex-col gap-2.5 cursor-pointer shadow-lg shadow-black/20 hover:-translate-y-1 hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+            isRead
+              ? 'bg-emerald-900/30 border-emerald-700/45 hover:border-emerald-600/60 hover:shadow-emerald-500/10'
+              : 'bg-slate-900 border-slate-800/80 hover:border-slate-600 hover:shadow-indigo-500/10'
+          } ${dragging ? '' : 'transition-all duration-300 ease-out'}`}
         >
           <div className="relative aspect-[2/3] w-full rounded-xl overflow-hidden ring-1 ring-white/5">
             <BookCover
@@ -141,22 +146,17 @@ export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelet
               author={book.author}
               className="w-full h-full"
               imgClassName="group-hover:scale-105 transition-transform duration-500"
+              onUnavailable={onCoverUnavailable ? () => onCoverUnavailable(book) : undefined}
             />
-            {/* Bottom fade keeps the overlay controls readable on light covers */}
-            <div aria-hidden className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/50 to-transparent pointer-events-none" />
+            {/* Top fade keeps the overlay controls readable on light covers */}
+            <div aria-hidden className="absolute inset-x-0 top-0 h-1/4 bg-gradient-to-b from-black/45 to-transparent pointer-events-none" />
 
             {book.status === 'READING' && (
               <span className="absolute top-2 left-2 inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-600/90 text-white shadow-md backdrop-blur-md">
                 <BookOpen size={11} /> Právě čtu
               </span>
             )}
-            {book.rating ? (
-              <span className="absolute top-2 right-2 inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-black/55 text-amber-300 backdrop-blur-md">
-                <Star size={10} fill="currentColor" /> {book.rating}
-              </span>
-            ) : null}
-
-            <div className="absolute bottom-2 left-2">
+            <div className="absolute top-2 right-2">
               <ReadToggle compact checked={isRead} onChange={(read) => onSetStatus(book, read ? 'READ' : 'UNREAD')} />
             </div>
           </div>
@@ -169,7 +169,17 @@ export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelet
               <AuthorAvatar src={book.authorPhotoUrl} name={book.author} size={20} />
               <p className="text-xs text-slate-400 truncate">{book.author || 'Neznámý autor'}</p>
             </div>
-            {meta && <p className="text-[11px] text-slate-500 mt-auto pt-1">{meta}</p>}
+            {(meta || book.rating) && (
+              <p className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-auto pt-1">
+                {book.rating ? (
+                  <span className="inline-flex items-center gap-0.5 text-amber-300/90 font-medium">
+                    <Star size={10} fill="currentColor" /> {book.rating}
+                  </span>
+                ) : null}
+                {book.rating && meta ? <span aria-hidden>·</span> : null}
+                {meta}
+              </p>
+            )}
           </div>
         </div>
       </div>

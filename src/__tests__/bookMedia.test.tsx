@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { findAuthorPhotoUrl, findCoverUrl, primaryAuthorName } from '@/lib/bookMedia';
+import { findAuthorPhotoUrl, findCoverUrl, findCoverForBook, primaryAuthorName } from '@/lib/bookMedia';
 import { BookCover, AuthorAvatar } from '@/components/BookImages';
 import { ReadToggle } from '@/components/ReadToggle';
 
@@ -88,6 +88,31 @@ describe('book media lookup', () => {
     });
 
     expect(await findAuthorPhotoUrl('Jan Novák')).toBe(olPhoto);
+  });
+
+  it('findCoverForBook finds a cover for a book without ISBN via a matching catalog record', async () => {
+    const cover = 'https://www.knihovny.cz/Cover/Show?isbn=8070613432&size=large';
+    imageSizes[cover] = [170, 240];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' } as unknown as Headers,
+      json: async () => ({
+        records: [
+          // review without ISBN, then a same-titled book by someone else, then the real one
+          { title: 'Saturnin : Zdeněk Jirotka - recenze', isbns: [], authors: { primary: { 'Klára Špičková': [] } } },
+          { title: 'Saturnin', isbns: ['80-00-00000-0'], authors: { primary: { 'Jan Jiný': [] } } },
+          { title: 'Saturnin', isbns: ['80-7061-343-2'], authors: { primary: { 'Zdeněk Jirotka, 1911-2003': [] } } },
+        ],
+      }),
+    } as unknown as Response);
+
+    expect(await findCoverForBook({ title: 'Saturnin', author: 'Zdeněk Jirotka', isbn: '' })).toBe(cover);
+    expect(String(fetchSpy.mock.calls[0][0])).toContain('type=Title');
+  });
+
+  it('findCoverForBook returns null when nothing matches', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false } as Response);
+    expect(await findCoverForBook({ title: 'Moje rodinná kronika', author: 'Babička Marie' })).toBeNull();
   });
 
   it('findAuthorPhotoUrl returns null without an author', async () => {
