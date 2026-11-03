@@ -9,7 +9,7 @@ interface ReadToggleProps {
   compact?: boolean;
 }
 
-const CONFETTI_COLORS = ['#34d399', '#a5b4fc', '#fbbf24', '#f472b6', '#38bdf8'];
+const CONFETTI_COLORS = ['#6ee7b7', '#34d399', '#a7f3d0', '#10b981'];
 const PARTICLES = Array.from({ length: 10 }, (_, i) => {
   const angle = (i / 10) * Math.PI * 2;
   const distance = 26 + (i % 3) * 8;

@@ -162,7 +162,6 @@ export default function Home() {
     () => shelf.filter((b) => matchesFilter(b, filterStatus) && matchesSearch(b, deferredSearch)),
     [shelf, filterStatus, deferredSearch]
   );
-  const readPercent = counts.ALL ? Math.round((counts.READ / counts.ALL) * 100) : 0;
 
   const handleLogout = async () => {
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
@@ -238,10 +237,7 @@ export default function Home() {
     setBooks((prev) => prev.map((b) => (b.id === book.id ? { ...b, status } : b)));
 
     if (status === 'READ') {
-      const readNow = counts.READ + 1;
-      toast(`Přečteno! Už máte ${readNow} z ${counts.ALL} ${readNow === counts.ALL ? '– celá knihovna 🎉' : ''}`.trim(), {
-        tone: 'success',
-      });
+      toast(`„${book.title}“ – přečteno`, { tone: 'success' });
     }
 
     const res = await fetch(`/api/books/${book.id}`, {
@@ -381,32 +377,6 @@ export default function Home() {
 
       {/* Main Content */}
       <main className="relative flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-5">
-        {user && counts.ALL > 0 && (
-          <section aria-label="Přehled čtení" className="flex items-center gap-4 rounded-2xl bg-slate-900/60 border border-slate-800/80 px-4 py-3 animate-rise">
-            <div className="flex-1 min-w-0">
-              <p className="text-sm text-slate-200">
-                <span className="font-bold text-white">{counts.READ}</span> z {counts.ALL} přečteno
-                {counts.READING > 0 && <span className="text-slate-400"> · {counts.READING} právě čtete</span>}
-              </p>
-              <div
-                role="progressbar"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={readPercent}
-                aria-label="Přečteno z knihovny"
-                className="mt-2 h-1.5 rounded-full bg-slate-800 overflow-hidden"
-              >
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-emerald-400 transition-[width] duration-700 ease-out"
-                  style={{ width: `${readPercent}%` }}
-                />
-              </div>
-            </div>
-            <span className="text-2xl font-bold tabular-nums text-white">{readPercent}%</span>
-          </section>
-        )}
-
-        {/* Search and Filters */}
         {/* Side by side only when the five counted filter chips leave the search box room */}
         <div className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
           <div className="relative flex-1 lg:min-w-64">
