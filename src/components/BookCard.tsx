@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useState } from 'react';
-import { CheckCircle2, BookOpen, Bookmark, Trash2, Edit2, X, Star } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { BookOpen, Bookmark, CheckCircle2, Trash2, Edit2, X, Star } from 'lucide-react';
 import { BookCover, AuthorAvatar } from '@/components/BookImages';
 import { ReadToggle } from '@/components/ReadToggle';
+import { Modal } from '@/components/Modal';
 
-interface Book {
+export interface Book {
   id: string;
   title: string;
   author?: string | null;
@@ -22,213 +23,278 @@ interface Book {
   rating?: number | null;
 }
 
+export type BookStatus = 'UNREAD' | 'READING' | 'READ';
+
 interface BookCardProps {
   book: Book;
+  index?: number;
+  highlighted?: boolean;
   onEdit: (book: Book) => void;
   onDelete: (id: string) => void;
-  onToggleRead: (book: Book) => void;
+  onSetStatus: (book: Book, status: BookStatus) => void;
 }
 
-export function BookCard({ book, onEdit, onDelete, onToggleRead }: BookCardProps) {
+const STATUS_OPTIONS: { id: BookStatus; label: string; icon: typeof Bookmark; active: string }[] = [
+  { id: 'UNREAD', label: 'Chci číst', icon: Bookmark, active: 'bg-slate-700 text-white' },
+  { id: 'READING', label: 'Právě čtu', icon: BookOpen, active: 'bg-indigo-600 text-white' },
+  { id: 'READ', label: 'Přečteno', icon: CheckCircle2, active: 'bg-emerald-600 text-white' },
+];
+
+const DELETE_WIDTH = 84;
+
+export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelete, onSetStatus }: BookCardProps) {
   const [showDetail, setShowDetail] = useState(false);
+  const [showFullDescription, setShowFullDescription] = useState(false);
   const [translateX, setTranslateX] = useState(0);
-  const [isSwiping, setIsSwiping] = useState(false);
-  const [touchStartX, setTouchStartX] = useState<number | null>(null);
-
-  const statusBadges: Record<string, { label: string; color: string; icon: any }> = {
-    UNREAD: { label: 'Chci číst', color: 'bg-slate-800 text-slate-300 border-slate-700', icon: Bookmark },
-    READING: { label: 'Právě čtu', color: 'bg-indigo-950/80 text-indigo-300 border-indigo-700/50', icon: BookOpen },
-    READ: { label: 'Přečteno', color: 'bg-emerald-950/80 text-emerald-300 border-emerald-700/50', icon: CheckCircle2 },
-  };
-
-  const badge = statusBadges[book.status] || statusBadges.UNREAD;
-  const BadgeIcon = badge.icon;
+  const [dragging, setDragging] = useState(false);
+  // Swipe gesture state: where the finger started and where the card was.
+  const gesture = useRef<{ startX: number; startY: number; startTranslate: number; horizontal: boolean | null } | null>(
+    null
+  );
+  const didSwipe = useRef(false);
 
   const handleTouchStart = (e: React.TouchEvent) => {
-    setTouchStartX(e.touches[0].clientX);
-    setIsSwiping(false);
+    gesture.current = {
+      startX: e.touches[0].clientX,
+      startY: e.touches[0].clientY,
+      startTranslate: translateX,
+      horizontal: null,
+    };
+    didSwipe.current = false;
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
-    if (touchStartX === null) return;
-    const diffX = e.touches[0].clientX - touchStartX;
-    if (diffX < 0) {
-      // Swiping left to reveal delete button
-      setTranslateX(Math.max(diffX, -100));
-      if (Math.abs(diffX) > 10) {
-        setIsSwiping(true);
-      }
-    } else if (translateX < 0) {
-      setTranslateX(Math.min(0, translateX + diffX));
-    }
+    const g = gesture.current;
+    if (!g) return;
+    const dx = e.touches[0].clientX - g.startX;
+    const dy = e.touches[0].clientY - g.startY;
+    // Decide once per gesture whether this is a horizontal swipe or the user
+    // scrolling the grid, so vertical scrolling never drags cards sideways.
+    if (g.horizontal === null && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) g.horizontal = Math.abs(dx) > Math.abs(dy);
+    if (!g.horizontal) return;
+    didSwipe.current = true;
+    setDragging(true);
+    setTranslateX(Math.max(-DELETE_WIDTH - 16, Math.min(0, g.startTranslate + dx)));
   };
 
   const handleTouchEnd = () => {
-    if (translateX < -60) {
-      // Snap open delete button
-      setTranslateX(-80);
-    } else {
-      // Snap back
-      setTranslateX(0);
-    }
-    setTouchStartX(null);
+    setDragging(false);
+    setTranslateX((x) => (x < -DELETE_WIDTH / 2 ? -DELETE_WIDTH : 0));
+    gesture.current = null;
   };
+
+  const isRead = book.status === 'READ';
+  const meta = [book.publishedYear, book.pageCount ? `${book.pageCount} str.` : null].filter(Boolean).join(' · ');
+  const longDescription = (book.description || '').length > 260;
 
   return (
     <>
-      <div className="relative overflow-hidden rounded-2xl">
-        {/* Background Action (Slide to delete) */}
-        <div className="absolute inset-y-0 right-0 w-20 bg-red-600/90 text-white flex items-center justify-center rounded-r-2xl z-0">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete(book.id);
-              setTranslateX(0);
-            }}
-            className="w-full h-full flex flex-col items-center justify-center gap-1 text-xs font-semibold"
-          >
-            <Trash2 size={20} />
-            <span>Smazat</span>
-          </button>
-        </div>
+      <div
+        className={`relative rounded-2xl animate-card-in ${highlighted ? 'animate-highlight' : ''}`}
+        style={{ animationDelay: highlighted ? undefined : `${Math.min(index, 12) * 45}ms` }}
+      >
+        {/* Revealed behind the card while swiping left */}
+        {translateX < 0 && (
+          <div className="absolute inset-y-0 right-0 flex items-center justify-end rounded-2xl bg-red-600/90 w-full">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(book.id);
+                setTranslateX(0);
+              }}
+              style={{ width: DELETE_WIDTH }}
+              className="h-full flex flex-col items-center justify-center gap-1 text-xs font-semibold text-white"
+            >
+              <Trash2 size={20} />
+              <span>Smazat</span>
+            </button>
+          </div>
+        )}
 
-        {/* Card Content */}
         <div
+          role="button"
+          tabIndex={0}
+          aria-label={`${book.title}${book.author ? `, ${book.author}` : ''}`}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
-          onClick={() => {
-            if (!isSwiping && translateX === 0) {
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
               setShowDetail(true);
-            } else {
-              setTranslateX(0);
             }
           }}
-          style={{ transform: `translateX(${translateX}px)` }}
-          className="group relative z-10 bg-slate-900 border border-slate-800/80 rounded-2xl p-3 flex flex-col gap-3 hover:border-slate-700 transition-transform duration-150 cursor-pointer shadow-lg hover:shadow-indigo-500/5 active:scale-[0.98]"
+          onClick={() => {
+            if (didSwipe.current) return;
+            if (translateX !== 0) setTranslateX(0);
+            else setShowDetail(true);
+          }}
+          style={{ transform: translateX ? `translateX(${translateX}px)` : undefined }}
+          className={`group relative z-10 h-full bg-slate-900 border border-slate-800/80 rounded-2xl p-2.5 flex flex-col gap-2.5 cursor-pointer shadow-lg shadow-black/20 hover:border-slate-600 hover:-translate-y-1 hover:shadow-xl hover:shadow-indigo-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+            dragging ? '' : 'transition-all duration-300 ease-out'
+          }`}
         >
-          <div className="relative aspect-[2/3] w-full rounded-xl overflow-hidden border border-slate-800">
+          <div className="relative aspect-[2/3] w-full rounded-xl overflow-hidden ring-1 ring-white/5">
             <BookCover
               src={book.coverUrl}
               title={book.title}
+              author={book.author}
               className="w-full h-full"
-              imgClassName="group-hover:scale-105 transition-transform duration-300"
+              imgClassName="group-hover:scale-105 transition-transform duration-500"
             />
+            {/* Bottom fade keeps the overlay controls readable on light covers */}
+            <div aria-hidden className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/50 to-transparent pointer-events-none" />
+
+            {book.status === 'READING' && (
+              <span className="absolute top-2 left-2 inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-600/90 text-white shadow-md backdrop-blur-md">
+                <BookOpen size={11} /> Právě čtu
+              </span>
+            )}
+            {book.rating ? (
+              <span className="absolute top-2 right-2 inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-black/55 text-amber-300 backdrop-blur-md">
+                <Star size={10} fill="currentColor" /> {book.rating}
+              </span>
+            ) : null}
 
             <div className="absolute bottom-2 left-2">
-              <ReadToggle compact checked={book.status === 'READ'} onChange={() => onToggleRead(book)} />
-            </div>
-
-            <div className="absolute top-2 right-2">
-              <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full border backdrop-blur-md ${badge.color}`}>
-                <BadgeIcon size={11} />
-                {badge.label}
-              </span>
+              <ReadToggle compact checked={isRead} onChange={(read) => onSetStatus(book, read ? 'READ' : 'UNREAD')} />
             </div>
           </div>
 
-          <div className="flex flex-col flex-1 justify-between gap-1">
-            <div>
-              <h3 className="font-semibold text-sm text-slate-100 line-clamp-1 group-hover:text-indigo-400 transition-colors">
-                {book.title}
-              </h3>
-              <div className="flex items-center gap-1.5 mt-1 min-w-0">
-                <AuthorAvatar src={book.authorPhotoUrl} name={book.author} size={20} />
-                <p className="text-xs text-slate-400 line-clamp-1">{book.author || 'Neznámý autor'}</p>
-              </div>
+          <div className="flex flex-col flex-1 gap-1 px-0.5">
+            <h3 className="font-semibold text-[13px] leading-snug text-slate-100 line-clamp-2 min-h-[2.5em] group-hover:text-indigo-300 transition-colors">
+              {book.title}
+            </h3>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <AuthorAvatar src={book.authorPhotoUrl} name={book.author} size={20} />
+              <p className="text-xs text-slate-400 truncate">{book.author || 'Neznámý autor'}</p>
             </div>
-
-            <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-800/60">
-              <span>{book.genre || 'Bez žánru'}</span>
-              {book.pageCount ? <span>{book.pageCount} str.</span> : null}
-            </div>
+            {meta && <p className="text-[11px] text-slate-500 mt-auto pt-1">{meta}</p>}
           </div>
         </div>
       </div>
 
-      {/* Modal Detail */}
-      {showDetail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-          <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl p-6 flex flex-col gap-5 max-h-[90vh] overflow-y-auto">
-            <button
-              aria-label="Zavřít"
-              onClick={() => setShowDetail(false)}
-              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-full hover:bg-slate-800 transition-colors"
-            >
-              <X size={20} />
-            </button>
+      <Modal open={showDetail} onClose={() => setShowDetail(false)} label={book.title}>
+        {/* Blurred cover as the backdrop of the hero area */}
+        <div className="relative overflow-hidden">
+          {book.coverUrl && !book.coverUrl.startsWith('data:') && (
+            <div
+              aria-hidden
+              className="absolute inset-0 bg-cover bg-center scale-125 blur-2xl opacity-40"
+              style={{ backgroundImage: `url("${book.coverUrl}")` }}
+            />
+          )}
+          <div aria-hidden className="absolute inset-0 bg-gradient-to-b from-transparent via-slate-900/60 to-slate-900" />
 
-            <div className="flex flex-col sm:flex-row gap-5 items-start">
-              <BookCover
-                src={book.coverUrl}
-                title={book.title}
-                className="w-28 sm:w-36 aspect-[2/3] rounded-xl shrink-0 border border-slate-700 shadow-md mx-auto sm:mx-0"
-              />
+          <button
+            aria-label="Zavřít"
+            onClick={() => setShowDetail(false)}
+            className="absolute top-3 right-3 z-10 p-2 text-slate-300 hover:text-white rounded-full bg-black/30 hover:bg-black/50 backdrop-blur transition-colors"
+          >
+            <X size={18} />
+          </button>
 
-              <div className="flex flex-col gap-2 flex-1 w-full text-center sm:text-left">
-                <span className={`self-center sm:self-start inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full border ${badge.color}`}>
-                  <BadgeIcon size={12} />
-                  {badge.label}
-                </span>
-
-                <h2 className="text-xl font-bold text-white leading-tight">{book.title}</h2>
-                <div className="flex items-center justify-center sm:justify-start gap-2">
-                  <AuthorAvatar src={book.authorPhotoUrl} name={book.author} size={36} />
-                  <p className="text-sm font-medium text-indigo-400">{book.author || 'Neznámý autor'}</p>
-                </div>
-
-                <div className="flex flex-wrap justify-center sm:justify-start gap-x-4 gap-y-1 text-xs text-slate-400 pt-2 border-t border-slate-800">
-                  {book.genre && <div>Žánr: <span className="text-slate-200">{book.genre}</span></div>}
-                  {book.publisher && <div>Nakladatelství: <span className="text-slate-200">{book.publisher}</span></div>}
-                  {book.publishedYear && <div>Rok / Vydání: <span className="text-slate-200">{book.publishedYear}</span></div>}
-                  {book.edition && <div>Edice: <span className="text-slate-200">{book.edition}</span></div>}
-                  {book.pageCount && <div>Stran: <span className="text-slate-200">{book.pageCount}</span></div>}
-                  {book.isbn && <div>ISBN: <span className="text-slate-200">{book.isbn}</span></div>}
-                </div>
-
-                {book.rating && (
-                  <div className="flex items-center justify-center sm:justify-start gap-1 text-amber-400 pt-1">
-                    {Array.from({ length: 5 }).map((_, i) => (
-                      <Star key={i} size={14} fill={i < (book.rating || 0) ? 'currentColor' : 'none'} className={i < (book.rating || 0) ? 'text-amber-400' : 'text-slate-700'} />
-                    ))}
-                  </div>
-                )}
+          <div className="relative flex flex-col sm:flex-row gap-5 items-center sm:items-end p-6 pt-8">
+            <BookCover
+              src={book.coverUrl}
+              title={book.title}
+              author={book.author}
+              className="w-32 sm:w-36 aspect-[2/3] rounded-xl shrink-0 shadow-2xl shadow-black/60 ring-1 ring-white/10 animate-rise"
+            />
+            <div className="flex flex-col gap-2 flex-1 min-w-0 text-center sm:text-left animate-rise [animation-delay:60ms]">
+              <h2 className="text-xl font-bold text-white leading-tight">{book.title}</h2>
+              <div className="flex items-center justify-center sm:justify-start gap-2">
+                <AuthorAvatar src={book.authorPhotoUrl} name={book.author} size={34} />
+                <p className="text-sm font-medium text-indigo-300">{book.author || 'Neznámý autor'}</p>
               </div>
-            </div>
-
-            {book.description && (
-              <div className="bg-slate-950/50 p-4 rounded-xl border border-slate-800/80">
-                <p className="text-xs leading-relaxed text-slate-300">{book.description}</p>
-              </div>
-            )}
-
-            <div className="flex justify-center sm:justify-start">
-              <ReadToggle checked={book.status === 'READ'} onChange={() => onToggleRead(book)} />
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => {
-                  setShowDetail(false);
-                  onEdit(book);
-                }}
-                className="flex-1 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-sm flex items-center justify-center gap-2 transition-colors"
-              >
-                <Edit2 size={16} /> Upravit
-              </button>
-              <button
-                onClick={() => {
-                  setShowDetail(false);
-                  onDelete(book.id);
-                }}
-                className="py-2.5 px-4 rounded-xl bg-red-950/40 hover:bg-red-900/60 text-red-400 font-medium text-sm flex items-center justify-center gap-2 border border-red-900/50 transition-colors"
-              >
-                <Trash2 size={16} /> Smazat
-              </button>
+              {book.rating ? (
+                <div className="flex items-center justify-center sm:justify-start gap-0.5 text-amber-400">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <Star key={i} size={14} fill={i < (book.rating || 0) ? 'currentColor' : 'none'} className={i < (book.rating || 0) ? '' : 'text-slate-600'} />
+                  ))}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
-      )}
+
+        <div className="flex flex-col gap-5 px-6 pb-6 animate-rise [animation-delay:120ms]">
+          {/* Reading status: one tap, no form needed */}
+          <div role="radiogroup" aria-label="Stav čtení" className="grid grid-cols-3 gap-1 p-1 rounded-2xl bg-slate-950/70 border border-slate-800">
+            {STATUS_OPTIONS.map(({ id, label, icon: Icon, active }) => {
+              const selected = book.status === id;
+              return (
+                <button
+                  key={id}
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => onSetStatus(book, id)}
+                  className={`flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-medium transition-all duration-200 ${
+                    selected ? `${active} shadow-md` : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                  }`}
+                >
+                  <Icon size={14} className={selected ? 'animate-pop' : ''} /> {label}
+                </button>
+              );
+            })}
+          </div>
+
+          <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+            {[
+              ['Žánr', book.genre],
+              ['Nakladatel', book.publisher],
+              ['Rok', book.publishedYear],
+              ['Vydání', book.edition],
+              ['Stran', book.pageCount ? String(book.pageCount) : null],
+              ['ISBN', book.isbn],
+            ]
+              .filter(([, value]) => value)
+              .map(([label, value]) => (
+                <div key={label} className="rounded-xl bg-slate-950/50 border border-slate-800/80 px-3 py-2 min-w-0">
+                  <dt className="text-[10px] uppercase tracking-wide text-slate-500">{label}</dt>
+                  <dd className={`text-slate-200 truncate ${label === 'ISBN' ? 'font-mono text-[11px]' : ''}`} title={value || ''}>
+                    {value}
+                  </dd>
+                </div>
+              ))}
+          </dl>
+
+          {book.description && (
+            <div className="bg-slate-950/50 p-4 rounded-xl border border-slate-800/80">
+              <p className={`text-xs leading-relaxed text-slate-300 ${showFullDescription ? '' : 'line-clamp-5'}`}>{book.description}</p>
+              {longDescription && (
+                <button
+                  onClick={() => setShowFullDescription((v) => !v)}
+                  className="mt-2 text-[11px] font-medium text-indigo-300 hover:text-indigo-200"
+                >
+                  {showFullDescription ? 'Méně' : 'Číst dál'}
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                setShowDetail(false);
+                onEdit(book);
+              }}
+              className="flex-1 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-sm flex items-center justify-center gap-2 transition-colors"
+            >
+              <Edit2 size={16} /> Upravit
+            </button>
+            <button
+              onClick={() => {
+                setShowDetail(false);
+                onDelete(book.id);
+              }}
+              className="py-2.5 px-4 rounded-xl bg-red-950/40 hover:bg-red-900/60 text-red-400 font-medium text-sm flex items-center justify-center gap-2 border border-red-900/50 transition-colors"
+            >
+              <Trash2 size={16} /> Smazat
+            </button>
+          </div>
+        </div>
+      </Modal>
     </>
   );
 }

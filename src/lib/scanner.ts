@@ -225,9 +225,12 @@ const stripTrailingPunctuation = (value: string) => value.replace(/[\s,;:/]+$/, 
 
 function mapKnihovnyRecord(rec: Record<string, unknown>, coverIsbn: string): BookSearchResult {
   const authorsObj = rec.authors as { primary?: Record<string, unknown>; secondary?: Record<string, unknown> } | undefined;
-  const primaryAuthor = authorsObj?.primary ? Object.keys(authorsObj.primary)[0] || '' : '';
+  // Secondary "authors" are translators, illustrators and even publishers
+  // ("Danka Vilhanová, Euromedia Group") — only fall back to them when the
+  // record names no primary author.
+  const primaryAuthors = authorsObj?.primary ? Object.keys(authorsObj.primary) : [];
   const secondaryAuthors = authorsObj?.secondary ? Object.keys(authorsObj.secondary) : [];
-  const author = [primaryAuthor, ...secondaryAuthors].map(cleanAuthorName).filter(Boolean).join(', ');
+  const author = (primaryAuthors.length ? primaryAuthors : secondaryAuthors).map(cleanAuthorName).filter(Boolean).join(', ');
 
   const publishers = rec.publishers;
   const publisher = Array.isArray(publishers)

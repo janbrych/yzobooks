@@ -215,7 +215,7 @@ describe('scanner module unit tests', () => {
     expect(cleanAuthorName('Jan Novák')).toBe('Jan Novák');
   });
 
-  it('searchKnihovnyCz cleans author names and dashes in returned ISBNs', async () => {
+  it('searchKnihovnyCz cleans author names, drops secondary contributors and dashes in ISBNs', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
       headers: { get: () => 'application/json' } as unknown as Headers,
@@ -231,7 +231,7 @@ describe('scanner module unit tests', () => {
     } as unknown as Response);
 
     const [result] = await searchKnihovnyCz('9788074832086');
-    expect(result.author).toBe('Karel Čapek, Blanka Kochová');
+    expect(result.author).toBe('Karel Čapek'); // translators/illustrators are not authors
     expect(result.isbn).toBe('9788074832086');
   });
 

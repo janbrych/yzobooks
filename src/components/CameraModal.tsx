@@ -4,6 +4,7 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, RefreshCw, X, Check, Sparkles } from 'lucide-react';
 import { processImageOrQuery, resolveBookFromBarcode, BookSearchResult, type BarcodeResolution } from '@/lib/scanner';
 import { enhanceCanvasForOcr } from '@/lib/imagePreprocessing';
+import { toast } from '@/lib/toast';
 import {
   MultiFormatReader,
   BarcodeFormat,
@@ -85,6 +86,14 @@ function downscaleImageIfNeeded(dataUrl: string): Promise<string> {
   });
 }
 
+const ANALYSIS_STEPS = [
+  'Hledám čárový kód…',
+  'Čtu text z obálky…',
+  'Prohledávám katalogy knihoven…',
+  'Porovnávám nalezené tituly…',
+  'Ještě chvilku…',
+];
+
 export interface BookData extends Partial<BookSearchResult> {
   id?: string;
   status?: string;
@@ -126,6 +135,16 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isVideoReady, setIsVideoReady] = useState(false);
   const autoScanStatus = 'Skenuji čárový kód / obálku...';
+  const [analysisStep, setAnalysisStep] = useState(0);
+
+  // Rotate the progress caption while a photo is analyzed — recognition can
+  // take several seconds and a static spinner reads as "stuck".
+  useEffect(() => {
+    if (!isAnalyzing) return;
+    setAnalysisStep(0);
+    const timer = setInterval(() => setAnalysisStep((s) => Math.min(s + 1, ANALYSIS_STEPS.length - 1)), 1600);
+    return () => clearInterval(timer);
+  }, [isAnalyzing]);
   const isScanningRef = useRef<boolean>(false);
 
   const stopCameraStream = useCallback(() => {
@@ -449,14 +468,14 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
         if (!clientResult.confident) {
           // Still no confident match anywhere — let the user know the form
           // was pre-filled from raw OCR text and needs a manual check.
-          setTimeout(() => alert('Kniha nebyla jednoznačně rozpoznána. Zkontrolujte prosím a doplňte údaje ručně.'), 150);
+          toast('Knihu se nepodařilo jednoznačně rozpoznat – zkontrolujte údaje nebo opište ISBN.', { tone: 'warning', duration: 5000 });
         }
       } else {
-        alert('Nepodařilo se rozpoznat knihu z fotky.');
+        toast('Z fotky se nepodařilo knihu rozpoznat.', { tone: 'warning' });
       }
     } catch (err) {
       console.error('Analyze error:', err);
-      alert('Chyba při zpracování fotky.');
+      toast('Při zpracování fotky nastala chyba.', { tone: 'error' });
     } finally {
       setIsAnalyzing(false);
     }
@@ -465,8 +484,8 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-fadeIn">
-      <div className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/90 backdrop-blur-md animate-backdrop-in">
+      <div className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[100dvh] animate-sheet-in">
         {/* Header */}
         <div className="p-4 flex items-center justify-between border-b border-slate-800">
           <div className="flex items-center gap-2 text-indigo-400 font-semibold text-sm">
@@ -485,7 +504,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
         {/* Camera / Photo area */}
         <div className="relative aspect-[3/4] w-full bg-slate-950 flex items-center justify-center overflow-hidden">
           {capturedImage ? (
-            <img src={capturedImage} alt="Captured" className="w-full h-full object-cover" />
+            <img src={capturedImage} alt="Captured" className="w-full h-full object-cover animate-fadeIn" />
           ) : stream ? (
             <>
               <video
@@ -518,10 +537,24 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
 
           {/* AI Loader Overlay */}
           {isAnalyzing && (
-            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 text-center p-6">
-              <RefreshCw size={36} className="text-indigo-400 animate-spin" />
-              <span className="font-semibold text-slate-200 text-sm">AI analýza obálky a vyhledávání knihy...</span>
-              <p className="text-xs text-slate-400">Extrahuje se název, autor, ISBN a metadata.</p>
+            <div className="absolute inset-0 animate-fadeIn">
+              {/* tinted photo with a sweeping scan line */}
+              <div className="absolute inset-0 bg-indigo-950/45" />
+              <div
+                aria-hidden
+                className="absolute inset-x-[6%] h-0.5 rounded-full bg-indigo-300 shadow-[0_0_18px_4px_rgb(129_140_248/0.7)] animate-scan"
+              />
+              {/* corner brackets framing the cover */}
+              {['top-4 left-4 border-t-2 border-l-2', 'top-4 right-4 border-t-2 border-r-2', 'bottom-4 left-4 border-b-2 border-l-2', 'bottom-4 right-4 border-b-2 border-r-2'].map((c) => (
+                <span key={c} aria-hidden className={`absolute w-8 h-8 rounded-sm border-indigo-300/80 ${c}`} />
+              ))}
+              <div className="absolute inset-x-4 bottom-8 flex flex-col items-center gap-1.5 text-center">
+                <span className="inline-flex items-center gap-2 rounded-full bg-slate-950/80 backdrop-blur px-4 py-2 text-sm font-semibold text-slate-100 shadow-lg">
+                  <RefreshCw size={14} className="text-indigo-300 animate-spin" />
+                  <span key={analysisStep} className="animate-rise">{ANALYSIS_STEPS[analysisStep]}</span>
+                </span>
+                <span className="text-[11px] text-slate-300/90">AI analýza obálky a vyhledávání knihy</span>
+              </div>
             </div>
           )}
         </div>

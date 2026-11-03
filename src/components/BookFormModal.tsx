@@ -6,6 +6,8 @@ import { processImageOrQuery, lookupBooksByISBN, validateISBNInput, BookSearchRe
 import { findAuthorPhotoUrl, findCoverUrl } from '@/lib/bookMedia';
 import { BookCover, AuthorAvatar } from '@/components/BookImages';
 import { ReadToggle } from '@/components/ReadToggle';
+import { Modal } from '@/components/Modal';
+import { toast } from '@/lib/toast';
 
 export interface BookFormData {
   id?: string;
@@ -159,8 +161,6 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
     }
   }, [initialData, isOpen, loadMedia]);
 
-  if (!isOpen) return null;
-
   const codeValidation = validateISBNInput(formData.isbn);
 
   const applySearchResult = (resData: BookSearchResult) => {
@@ -208,11 +208,11 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
       if (clientResult && clientResult.result) {
         applySearchResult(clientResult.result);
       } else {
-        alert('Nenalezeny žádné podrobnosti k vyhledanému dotazu.');
+        toast('K tomuto dotazu jsme nic nenašli.', { tone: 'warning' });
       }
     } catch (err) {
       console.error(err);
-      alert('Chyba při hledání v databázi.');
+      toast('Hledání se nezdařilo. Zkuste to prosím znovu.', { tone: 'error' });
     } finally {
       setIsSearching(false);
     }
@@ -277,7 +277,8 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.title.trim()) {
-      alert('Prosím vyplňte název knihy.');
+      toast('Doplňte prosím název knihy.', { tone: 'warning' });
+      document.getElementById('title-input')?.focus();
       return;
     }
 
@@ -298,8 +299,13 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-      <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl p-6 flex flex-col gap-4 max-h-[90vh] overflow-y-auto">
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      label={initialData?.id ? 'Upravit knihu' : 'Přidat novou knihu'}
+      dismissOnBackdrop={false}
+    >
+      <div className="p-5 pt-2 sm:p-6 flex flex-col gap-4">
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <h2 className="text-lg font-bold text-slate-100">
             {initialData?.id ? 'Upravit knihu' : 'Přidat novou knihu'}
@@ -336,14 +342,16 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
         <section aria-label="Náhled knihy" className="flex gap-4 bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80">
           <div className="relative w-24 sm:w-28 shrink-0">
             <BookCover
+              key={formData.coverUrl || 'none'}
               src={formData.coverUrl}
               title={formData.title}
-              className="aspect-[2/3] w-full rounded-xl border border-slate-700 shadow-md"
+              author={formData.author}
+              compact
+              className="aspect-[2/3] w-full rounded-xl ring-1 ring-white/10 shadow-xl shadow-black/40 animate-rise"
             />
             {isLoadingCover && (
-              <div className="absolute inset-0 rounded-xl bg-slate-950/60 flex flex-col items-center justify-center gap-1 text-[10px] text-slate-300">
-                <RefreshCw size={16} className="animate-spin" />
-                Hledám obálku
+              <div className="absolute inset-0 rounded-xl skeleton animate-shimmer flex items-end justify-center pb-2 text-[10px] font-medium text-slate-200">
+                Hledám obálku…
               </div>
             )}
           </div>
@@ -665,6 +673,6 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
           </div>
         </form>
       </div>
-    </div>
+    </Modal>
   );
 }
