@@ -7,6 +7,10 @@ import {
   isValidISBN10,
   isValidISBN13,
   UNRECOGNIZED_TITLE,
+  cleanAuthorName,
+  normalizeISBNInput,
+  validateISBNInput,
+  lookupBookByISBN,
 } from '@/lib/scanner';
 
 describe('scanner module unit tests', () => {
@@ -173,5 +177,74 @@ describe('scanner module unit tests', () => {
     const res = await processImageOrQuery({ query: 'isbn:9780316769488' });
     expect(res.confident).toBe(true);
     expect(res.result.title).toBe('Jáma a kyvadlo');
+  });
+
+  it('cleanAuthorName turns catalog authority names into plain reader-facing names', () => {
+    expect(cleanAuthorName('Karel Čapek, 1890-1938')).toBe('Karel Čapek');
+    expect(cleanAuthorName('Blanka Kochová, 1991-')).toBe('Blanka Kochová');
+    expect(cleanAuthorName('Čapek, Karel')).toBe('Karel Čapek');
+    expect(cleanAuthorName('Jan Novák')).toBe('Jan Novák');
+  });
+
+  it('searchKnihovnyCz cleans author names and dashes in returned ISBNs', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' } as unknown as Headers,
+      json: async () => ({
+        records: [
+          {
+            title: 'Bílá nemoc',
+            authors: { primary: { 'Karel Čapek, 1890-1938': [] }, secondary: { 'Blanka Kochová, 1991-': [] } },
+            isbns: ['978-80-7483-208-6'],
+          },
+        ],
+      }),
+    } as unknown as Response);
+
+    const [result] = await searchKnihovnyCz('9788074832086');
+    expect(result.author).toBe('Karel Čapek, Blanka Kochová');
+    expect(result.isbn).toBe('9788074832086');
+  });
+
+  it('normalizeISBNInput strips prefixes and separators from typed codes', () => {
+    expect(normalizeISBNInput('ISBN 978-80-7483-208-6')).toBe('9788074832086');
+    expect(normalizeISBNInput(' 80-7178-432-x ')).toBe('807178432X');
+    expect(normalizeISBNInput('EAN: 8594001150019')).toBe('8594001150019');
+  });
+
+  it('validateISBNInput reports valid ISBN/EAN codes and explains invalid ones', () => {
+    expect(validateISBNInput('')).toBeNull();
+    expect(validateISBNInput('978-80-7483-208-6')).toMatchObject({ code: '9788074832086', valid: true, message: 'Platné ISBN-13' });
+    expect(validateISBNInput('8594001150014')).toMatchObject({ valid: true, message: 'Platný EAN-13 (není ISBN)' });
+    expect(validateISBNInput('0306406152')).toMatchObject({ valid: true, message: 'Platné ISBN-10' });
+    expect(validateISBNInput('9788074832087')?.valid).toBe(false);
+    expect(validateISBNInput('97880748')).toMatchObject({ valid: false, message: expect.stringContaining('zadáno 8') });
+  });
+
+  it('lookupBookByISBN rejects invalid codes without hitting the network', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    expect(await lookupBookByISBN('9788074832087')).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('lookupBookByISBN never falls back to a fuzzy text search when the code is unknown', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false } as Response);
+    expect(await lookupBookByISBN('978-80-7483-208-6')).toBeNull();
+    const urls = fetchSpy.mock.calls.map(([url]) => String(url));
+    expect(urls).toHaveLength(3);
+    expect(urls[0]).toContain('knihovny.cz');
+    expect(urls[1]).toContain('isbn%3A9788074832086');
+    expect(urls[2]).toContain('openlibrary.org/search.json?q=9788074832086');
+  });
+
+  it('lookupBookByISBN returns the catalog match for a valid code', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' } as unknown as Headers,
+      json: async () => ({ records: [{ title: 'Bílá nemoc', authors: { primary: { 'Karel Čapek, 1890-1938': [] } }, isbns: [] }] }),
+    } as unknown as Response);
+
+    const result = await lookupBookByISBN('978-80-7483-208-6');
+    expect(result).toMatchObject({ title: 'Bílá nemoc', author: 'Karel Čapek', isbn: '9788074832086' });
   });
 });

@@ -57,7 +57,9 @@ export default function Home() {
 
       // Fallback to localStorage (for GitHub Pages / static export / offline mode)
       let localItems = getLocalBooks();
-      if (filterStatus !== 'ALL') {
+      if (filterStatus === 'NOT_READ') {
+        localItems = localItems.filter((b) => b.status !== 'READ');
+      } else if (filterStatus !== 'ALL') {
         localItems = localItems.filter((b) => b.status === filterStatus);
       }
       if (debouncedSearchQuery.trim()) {
@@ -67,7 +69,8 @@ export default function Home() {
             b.title.toLowerCase().includes(q) ||
             b.author.toLowerCase().includes(q) ||
             b.genre.toLowerCase().includes(q) ||
-            b.publisher.toLowerCase().includes(q)
+            b.publisher.toLowerCase().includes(q) ||
+            b.isbn.toLowerCase().includes(q)
         );
       }
       setBooks(localItems);
@@ -150,6 +153,37 @@ export default function Home() {
       fetchBooks();
       setEditingBook(null);
     }
+  };
+
+  // LocalStorage fallback. Only touches books that live there — upserting an
+  // unknown (server-side) id would create an empty duplicate entry.
+  const updateLocalStatus = (id: string, status: LocalBook['status']) => {
+    if (getLocalBooks().some((b) => b.id === id)) {
+      addOrUpdateLocalBook({ id, status });
+    }
+  };
+
+  const handleToggleRead = async (book: { id: string; status: string }) => {
+    const status: LocalBook['status'] = book.status === 'READ' ? 'UNREAD' : 'READ';
+    // Optimistic update so the switch reacts immediately; fetchBooks() then
+    // reconciles with the source of truth (and the active filter).
+    setBooks((prev) => prev.map((b) => (b.id === book.id ? { ...b, status } : b)));
+
+    try {
+      const res = await fetch(`/api/books/${book.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      }).catch(() => null);
+
+      if (!res || !res.ok) {
+        updateLocalStatus(book.id, status);
+      }
+    } catch (err) {
+      console.error('Toggle read error:', err);
+      updateLocalStatus(book.id, status);
+    }
+    fetchBooks();
   };
 
   const handleDeleteBook = async (id: string) => {
@@ -237,6 +271,7 @@ export default function Home() {
               { id: 'READING', label: 'Čtu' },
               { id: 'UNREAD', label: 'Chci číst' },
               { id: 'READ', label: 'Přečteno' },
+              { id: 'NOT_READ', label: 'Nepřečteno' },
             ].map((st) => (
               <button
                 key={st.id}
@@ -294,6 +329,7 @@ export default function Home() {
                   setIsFormOpen(true);
                 }}
                 onDelete={handleDeleteBook}
+                onToggleRead={handleToggleRead}
               />
             ))}
           </div>

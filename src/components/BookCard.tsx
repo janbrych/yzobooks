@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useState } from 'react';
-import { BookPlus, CheckCircle2, BookOpen, Bookmark, Trash2, Edit2, X, Star } from 'lucide-react';
+import { CheckCircle2, BookOpen, Bookmark, Trash2, Edit2, X, Star } from 'lucide-react';
+import { BookCover, AuthorAvatar } from '@/components/BookImages';
+import { ReadToggle } from '@/components/ReadToggle';
 
 interface Book {
   id: string;
@@ -15,6 +17,7 @@ interface Book {
   isbn?: string | null;
   description?: string | null;
   coverUrl?: string | null;
+  authorPhotoUrl?: string | null;
   status: string;
   rating?: number | null;
 }
@@ -23,9 +26,10 @@ interface BookCardProps {
   book: Book;
   onEdit: (book: Book) => void;
   onDelete: (id: string) => void;
+  onToggleRead: (book: Book) => void;
 }
 
-export function BookCard({ book, onEdit, onDelete }: BookCardProps) {
+export function BookCard({ book, onEdit, onDelete, onToggleRead }: BookCardProps) {
   const [showDetail, setShowDetail] = useState(false);
   const [translateX, setTranslateX] = useState(0);
   const [isSwiping, setIsSwiping] = useState(false);
@@ -103,19 +107,17 @@ export function BookCard({ book, onEdit, onDelete }: BookCardProps) {
           style={{ transform: `translateX(${translateX}px)` }}
           className="group relative z-10 bg-slate-900 border border-slate-800/80 rounded-2xl p-3 flex flex-col gap-3 hover:border-slate-700 transition-transform duration-150 cursor-pointer shadow-lg hover:shadow-indigo-500/5 active:scale-[0.98]"
         >
-          <div className="relative aspect-[2/3] w-full rounded-xl overflow-hidden bg-slate-800/50 flex items-center justify-center border border-slate-800">
-            {book.coverUrl ? (
-              <img
-                src={book.coverUrl}
-                alt={book.title}
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-              />
-            ) : (
-              <div className="flex flex-col items-center justify-center text-slate-600 p-2 text-center">
-                <BookPlus size={36} className="mb-2 opacity-50" />
-                <span className="text-xs font-medium line-clamp-2">{book.title}</span>
-              </div>
-            )}
+          <div className="relative aspect-[2/3] w-full rounded-xl overflow-hidden border border-slate-800">
+            <BookCover
+              src={book.coverUrl}
+              title={book.title}
+              className="w-full h-full"
+              imgClassName="group-hover:scale-105 transition-transform duration-300"
+            />
+
+            <div className="absolute bottom-2 left-2">
+              <ReadToggle compact checked={book.status === 'READ'} onChange={() => onToggleRead(book)} />
+            </div>
 
             <div className="absolute top-2 right-2">
               <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full border backdrop-blur-md ${badge.color}`}>
@@ -130,7 +132,10 @@ export function BookCard({ book, onEdit, onDelete }: BookCardProps) {
               <h3 className="font-semibold text-sm text-slate-100 line-clamp-1 group-hover:text-indigo-400 transition-colors">
                 {book.title}
               </h3>
-              <p className="text-xs text-slate-400 line-clamp-1">{book.author || 'Neznámý autor'}</p>
+              <div className="flex items-center gap-1.5 mt-1 min-w-0">
+                <AuthorAvatar src={book.authorPhotoUrl} name={book.author} size={20} />
+                <p className="text-xs text-slate-400 line-clamp-1">{book.author || 'Neznámý autor'}</p>
+              </div>
             </div>
 
             <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-800/60">
@@ -154,15 +159,11 @@ export function BookCard({ book, onEdit, onDelete }: BookCardProps) {
             </button>
 
             <div className="flex flex-col sm:flex-row gap-5 items-start">
-              <div className="w-28 sm:w-36 aspect-[2/3] rounded-xl overflow-hidden bg-slate-800 shrink-0 border border-slate-700 shadow-md mx-auto sm:mx-0">
-                {book.coverUrl ? (
-                  <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-slate-600">
-                    <BookPlus size={32} />
-                  </div>
-                )}
-              </div>
+              <BookCover
+                src={book.coverUrl}
+                title={book.title}
+                className="w-28 sm:w-36 aspect-[2/3] rounded-xl shrink-0 border border-slate-700 shadow-md mx-auto sm:mx-0"
+              />
 
               <div className="flex flex-col gap-2 flex-1 w-full text-center sm:text-left">
                 <span className={`self-center sm:self-start inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full border ${badge.color}`}>
@@ -171,7 +172,10 @@ export function BookCard({ book, onEdit, onDelete }: BookCardProps) {
                 </span>
 
                 <h2 className="text-xl font-bold text-white leading-tight">{book.title}</h2>
-                <p className="text-sm font-medium text-indigo-400">{book.author || 'Neznámý autor'}</p>
+                <div className="flex items-center justify-center sm:justify-start gap-2">
+                  <AuthorAvatar src={book.authorPhotoUrl} name={book.author} size={36} />
+                  <p className="text-sm font-medium text-indigo-400">{book.author || 'Neznámý autor'}</p>
+                </div>
 
                 <div className="flex flex-wrap justify-center sm:justify-start gap-x-4 gap-y-1 text-xs text-slate-400 pt-2 border-t border-slate-800">
                   {book.genre && <div>Žánr: <span className="text-slate-200">{book.genre}</span></div>}
@@ -198,7 +202,11 @@ export function BookCard({ book, onEdit, onDelete }: BookCardProps) {
               </div>
             )}
 
-            <div className="flex items-center gap-3 pt-2">
+            <div className="flex justify-center sm:justify-start">
+              <ReadToggle checked={book.status === 'READ'} onChange={() => onToggleRead(book)} />
+            </div>
+
+            <div className="flex items-center gap-3">
               <button
                 onClick={() => {
                   setShowDetail(false);

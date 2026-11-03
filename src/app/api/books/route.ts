@@ -23,7 +23,9 @@ export async function GET(req: Request) {
     userId: user.userId,
   };
 
-  if (status && status !== 'ALL') {
+  if (status === 'NOT_READ') {
+    whereClause.status = { not: 'READ' };
+  } else if (status && status !== 'ALL') {
     whereClause.status = status;
   }
 
@@ -58,7 +60,7 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
-    const { title, author, genre, publisher, publishedYear, edition, pageCount, isbn, description, coverUrl, status, rating } = body;
+    const { title, author, genre, publisher, publishedYear, edition, pageCount, isbn, description, coverUrl, authorPhotoUrl, status, rating } = body;
 
     if (!title) {
       return NextResponse.json({ error: 'Název knihy je povinný.' }, { status: 400 });
@@ -76,6 +78,7 @@ export async function POST(req: Request) {
         isbn: isbn || null,
         description: description || null,
         coverUrl: coverUrl || null,
+        authorPhotoUrl: authorPhotoUrl || null,
         status: status || 'UNREAD',
         rating: rating ? parseInt(String(rating), 10) : null,
         userId: user.userId,

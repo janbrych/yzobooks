@@ -139,6 +139,46 @@ export function extractISBN(text: string): string | null {
   return isbn13Candidates[0] || isbn10Candidates[0] || rawMatches13[0] || null;
 }
 
+// Strip only the separators users and scanners put into codes ("978-80-…",
+// "ISBN 80 …") so the checksum validators can be applied to what's left.
+export function normalizeISBNInput(raw: string): string {
+  return raw.replace(/^\s*(?:ISBN|EAN)(?:-1[03])?:?/i, '').replace(/[^0-9X]/gi, '').toUpperCase();
+}
+
+export interface ISBNValidation {
+  code: string;
+  valid: boolean;
+  message: string;
+}
+
+// Human-readable verdict for a typed/scanned code, used by the manual entry
+// field. Any EAN-13 shares the ISBN-13 checksum, so both are accepted.
+export function validateISBNInput(raw: string): ISBNValidation | null {
+  const code = normalizeISBNInput(raw);
+  if (!code) return null;
+  if (code.length === 13) {
+    if (!isValidISBN13(code)) return { code, valid: false, message: 'Neplatný kontrolní součet – zkontrolujte číslice.' };
+    return { code, valid: true, message: /^97[89]/.test(code) ? 'Platné ISBN-13' : 'Platný EAN-13 (není ISBN)' };
+  }
+  if (code.length === 10) {
+    if (!isValidISBN10(code)) return { code, valid: false, message: 'Neplatný kontrolní součet – zkontrolujte číslice.' };
+    return { code, valid: true, message: 'Platné ISBN-10' };
+  }
+  return { code, valid: false, message: `Kód musí mít 10 nebo 13 číslic (zadáno ${code.length}).` };
+}
+
+// Library catalogs (Knihovny.cz in particular) return authority-form names
+// like "Karel Čapek, 1890-1938" or "Čapek, Karel" — turn those into the plain
+// "Karel Čapek" a reader expects and an author-photo lookup can match.
+export function cleanAuthorName(name: string): string {
+  const withoutDates = name.replace(/,?\s*\(?\d{3,4}\s*-\s*(?:\d{3,4})?\)?\s*$/, '').trim();
+  const parts = withoutDates.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length === 2 && !/\s/.test(parts[0])) {
+    return `${parts[1]} ${parts[0]}`;
+  }
+  return withoutDates;
+}
+
 // Direct search Knihovny.cz API
 export async function searchKnihovnyCz(isbn: string): Promise<BookSearchResult[]> {
   try {
@@ -162,7 +202,7 @@ export async function searchKnihovnyCz(isbn: string): Promise<BookSearchResult[]
       const authorsObj = rec.authors as { primary?: Record<string, unknown>; secondary?: Record<string, unknown> } | undefined;
       const primaryAuthor = authorsObj?.primary ? Object.keys(authorsObj.primary)[0] || '' : '';
       const secondaryAuthors = authorsObj?.secondary ? Object.keys(authorsObj.secondary) : [];
-      const author = [primaryAuthor, ...secondaryAuthors].filter(Boolean).join(', ');
+      const author = [primaryAuthor, ...secondaryAuthors].map(cleanAuthorName).filter(Boolean).join(', ');
 
       const title = (rec.title || rec.cleanTitle || '') as string;
       const publishers = rec.publishers;
@@ -174,7 +214,7 @@ export async function searchKnihovnyCz(isbn: string): Promise<BookSearchResult[]
       const summary = rec.summary;
       const description = Array.isArray(summary) ? summary.join(' ') : ((summary || '') as string);
       const isbns = rec.isbns;
-      const recIsbn = Array.isArray(isbns) ? String(isbns[0]) : cleanedIsbn;
+      const recIsbn = Array.isArray(isbns) && isbns[0] ? normalizeISBNInput(String(isbns[0])) : cleanedIsbn;
 
       return {
         title,
@@ -253,6 +293,28 @@ export async function searchOpenLibrary(query: string): Promise<BookSearchResult
   }
 }
 
+// Catalog lookup by an exact ISBN/EAN, most local source first.
+async function searchByISBN(isbn: string): Promise<BookSearchResult[]> {
+  let results = await searchKnihovnyCz(isbn);
+  if (results.length === 0) {
+    results = await searchGoogleBooks(`isbn:${isbn}`);
+  }
+  if (results.length === 0) {
+    results = await searchOpenLibrary(isbn);
+  }
+  return results;
+}
+
+// Look up a manually entered code. Unlike resolveBookFromText this never
+// falls back to a fuzzy text search: a wrong-but-plausible match is exactly
+// what the user is trying to correct by typing the code in.
+export async function lookupBookByISBN(raw: string): Promise<BookSearchResult | null> {
+  const isbn = normalizeISBNInput(raw);
+  if (!isValidISBN(isbn)) return null;
+  const [best] = await searchByISBN(isbn);
+  return best ? { ...best, isbn: best.isbn || isbn } : null;
+}
+
 // Placeholder title used only when no real catalog match was found — a single
 // constant so every caller (client + server) can detect a low-confidence
 // result the same way, instead of each re-implementing its own string check.
@@ -289,13 +351,7 @@ export async function resolveBookFromText(
   let searchResults: BookSearchResult[] = [];
 
   if (isbn) {
-    searchResults = await searchKnihovnyCz(isbn);
-    if (searchResults.length === 0) {
-      searchResults = await searchGoogleBooks(`isbn:${isbn}`);
-    }
-    if (searchResults.length === 0) {
-      searchResults = await searchOpenLibrary(isbn);
-    }
+    searchResults = await searchByISBN(isbn);
   }
 
   if (searchResults.length === 0 && extractedText) {
