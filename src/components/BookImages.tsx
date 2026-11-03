@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { User } from 'lucide-react';
 
 // Stable small hash so a book keeps "its" colors across renders and devices.
@@ -64,6 +64,9 @@ interface BookCoverProps {
   className?: string;
   imgClassName?: string;
   compact?: boolean;
+  // Called once per src when there is no usable image, so the caller can
+  // look up a real cover instead of showing the generated one for good.
+  onUnavailable?: () => void;
 }
 
 // Catalog "no cover" placeholders (Knihovny.cz: 65×80) load fine, so they are
@@ -72,11 +75,18 @@ const MIN_REAL_COVER_WIDTH = 80;
 
 // Cover image that fades in over a shimmer while loading and degrades to a
 // generated cover when the URL is missing, broken or a catalog placeholder.
-export function BookCover({ src, title, author, className = '', imgClassName = '', compact = false }: BookCoverProps) {
+export function BookCover({ src, title, author, className = '', imgClassName = '', compact = false, onUnavailable }: BookCoverProps) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const showImage = Boolean(src) && failedSrc !== src;
   const loaded = loadedSrc === src;
+
+  const reportedFor = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (showImage || !onUnavailable || reportedFor.current === (src || null)) return;
+    reportedFor.current = src || null;
+    onUnavailable();
+  }, [showImage, src, onUnavailable]);
 
   return (
     <div className={`relative overflow-hidden bg-slate-800/60 ${className}`}>

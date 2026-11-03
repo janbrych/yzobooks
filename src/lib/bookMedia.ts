@@ -2,7 +2,7 @@
 // sources. Runs in the browser so it works the same with the API backend and
 // in the static GitHub Pages export.
 
-import { cleanAuthorName, normalizeISBNInput } from '@/lib/scanner';
+import { cleanAuthorName, normalizeISBNInput, isRelevantMatch, searchKnihovnyCzText } from '@/lib/scanner';
 
 // Catalog cover services answer a missing cover with a tiny placeholder
 // instead of an error (Knihovny.cz: a 65×80 "no cover" PNG, Open Library
@@ -50,6 +50,33 @@ export function coverCandidates(isbn: string): string[] {
 export async function findCoverUrl(isbn: string, currentCoverUrl?: string): Promise<string | null> {
   const current = currentCoverUrl && /^https?:/i.test(currentCoverUrl) ? [currentCoverUrl] : [];
   return firstLoadable([...current, ...coverCandidates(isbn)]);
+}
+
+// Cover for a book without (a usable) ISBN, e.g. typed in by hand: find the
+// matching catalog record and use the cover of its ISBN. (Open Library's own
+// title search was tried first, but its user-uploaded covers can be plain
+// wrong — "Saturnin" came back as a holiday photo.)
+async function coverByTitle(title: string, author: string): Promise<string | null> {
+  if (title.trim().length < 2) return null;
+  // Title-only search: "title + author" across all fields mostly returns
+  // reviews and theatre programmes without an ISBN. The author is checked
+  // on the results instead.
+  const known = `${title} ${primaryAuthorName(author)}`.trim();
+  const records = await searchKnihovnyCzText(title, { type: 'Title', limit: 10 });
+  const matches = records.filter((r) => r.isbn && isRelevantMatch(r, known)).slice(0, 4);
+  for (const record of matches) {
+    const cover = await findCoverUrl(record.isbn);
+    if (cover) return cover;
+  }
+  return null;
+}
+
+// Find a cover for a saved book whose cover is missing or unusable: by ISBN
+// first, then by title and author.
+export async function findCoverForBook(book: { isbn?: string | null; title: string; author?: string | null }): Promise<string | null> {
+  const byIsbn = book.isbn ? await findCoverUrl(book.isbn) : null;
+  if (byIsbn) return byIsbn;
+  return coverByTitle(book.title, book.author || '');
 }
 
 // Only the first author is pictured: "Karel Čapek, Josef Čapek" → "Karel Čapek".

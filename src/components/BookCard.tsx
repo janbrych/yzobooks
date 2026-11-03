@@ -32,6 +32,7 @@ interface BookCardProps {
   onEdit: (book: Book) => void;
   onDelete: (id: string) => void;
   onSetStatus: (book: Book, status: BookStatus) => void;
+  onCoverUnavailable?: (book: Book) => void;
 }
 
 const STATUS_OPTIONS: { id: BookStatus; label: string; icon: typeof Bookmark; active: string }[] = [
@@ -42,7 +43,7 @@ const STATUS_OPTIONS: { id: BookStatus; label: string; icon: typeof Bookmark; ac
 
 const DELETE_WIDTH = 84;
 
-export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelete, onSetStatus }: BookCardProps) {
+export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelete, onSetStatus, onCoverUnavailable }: BookCardProps) {
   const [showDetail, setShowDetail] = useState(false);
   const [showFullDescription, setShowFullDescription] = useState(false);
   const [translateX, setTranslateX] = useState(0);
@@ -141,6 +142,7 @@ export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelet
               author={book.author}
               className="w-full h-full"
               imgClassName="group-hover:scale-105 transition-transform duration-500"
+              onUnavailable={onCoverUnavailable ? () => onCoverUnavailable(book) : undefined}
             />
             {/* Bottom fade keeps the overlay controls readable on light covers */}
             <div aria-hidden className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/50 to-transparent pointer-events-none" />

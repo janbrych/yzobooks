@@ -83,7 +83,15 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
   // record when a different code turns out to be unknown.
   const catalogCodeRef = useRef<string | null>(null);
 
-  const loadMedia = useCallback(
+  // Latest form state and the image lookup in flight, so saving can wait for
+  // a cover that is still being found instead of storing a title-only book.
+  const formDataRef = useRef(formData);
+  useEffect(() => {
+    formDataRef.current = formData;
+  }, [formData]);
+  const mediaPromiseRef = useRef<Promise<void>>(Promise.resolve());
+
+  const runMediaLookup = useCallback(
     async (book: Pick<BookFormData, 'isbn' | 'author' | 'coverUrl' | 'authorPhotoUrl'>, opts: { cover: boolean; author: boolean }) => {
       const requestId = ++mediaRequestRef.current;
       const isCurrent = () => requestId === mediaRequestRef.current;
@@ -116,6 +124,15 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
       await Promise.all([coverTask, authorTask]);
     },
     []
+  );
+
+  const loadMedia = useCallback(
+    (book: Pick<BookFormData, 'isbn' | 'author' | 'coverUrl' | 'authorPhotoUrl'>, opts: { cover: boolean; author: boolean }) => {
+      const run = runMediaLookup(book, opts);
+      mediaPromiseRef.current = run;
+      return run;
+    },
+    [runMediaLookup]
   );
 
   useEffect(() => {
@@ -284,11 +301,17 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
 
     setIsSaving(true);
     try {
+      if (isLoadingCover || isLoadingAuthorPhoto) {
+        await Promise.race([mediaPromiseRef.current, new Promise((resolve) => setTimeout(resolve, 6000))]);
+        // let the state updates from the finished lookup land
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      const latest = formDataRef.current;
       await onSave({
-        ...formData,
-        isbn: codeValidation?.valid ? codeValidation.code : formData.isbn.trim(),
-        pageCount: formData.pageCount ? parseInt(formData.pageCount, 10) : null,
-        rating: formData.rating || null,
+        ...latest,
+        isbn: codeValidation?.valid ? codeValidation.code : latest.isbn.trim(),
+        pageCount: latest.pageCount ? parseInt(latest.pageCount, 10) : null,
+        rating: latest.rating || null,
       });
       onClose();
     } catch (err) {

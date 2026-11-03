@@ -8,6 +8,7 @@ import { BookFormModal, BookFormData, BookFormInitialData } from '@/components/B
 import { AuthModal } from '@/components/AuthModal';
 import { Toaster } from '@/components/Toaster';
 import { toast } from '@/lib/toast';
+import { findCoverForBook } from '@/lib/bookMedia';
 import { getLocalBooks, addOrUpdateLocalBook, deleteLocalBook, LocalBook } from '@/lib/localStorage';
 
 type Filter = 'ALL' | 'READING' | 'UNREAD' | 'READ' | 'NOT_READ';
@@ -91,6 +92,10 @@ export default function Home() {
   // Books removed from view but not yet deleted, so "Vrátit" can bring them back.
   const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set());
   const deleteTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  // Books whose cover was already looked up this session, and the queue that
+  // runs those lookups one at a time (a big shelf shouldn't fire dozens at once).
+  const coverRepairs = useRef(new Set<string>());
+  const coverRepairQueue = useRef<Promise<void>>(Promise.resolve());
 
   // Modals
   const [isCameraOpen, setIsCameraOpen] = useState(false);
@@ -249,6 +254,29 @@ export default function Home() {
     }
     fetchBooks();
   };
+
+  // A card showing the generated title-only cover reports it here: books saved
+  // before their cover lookup finished, typed in by hand, or whose cover link
+  // died. Find a real cover and store it, so the shelf shows covers, not names.
+  const handleCoverUnavailable = useCallback((book: Book) => {
+    if (coverRepairs.current.has(book.id)) return;
+    coverRepairs.current.add(book.id);
+    coverRepairQueue.current = coverRepairQueue.current
+      .then(async () => {
+        const coverUrl = await findCoverForBook(book);
+        if (!coverUrl || coverUrl === book.coverUrl) return;
+        setBooks((prev) => prev.map((b) => (b.id === book.id ? { ...b, coverUrl } : b)));
+        const res = await fetch(`/api/books/${book.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ coverUrl }),
+        }).catch(() => null);
+        if ((!res || !res.ok) && getLocalBooks().some((b) => b.id === book.id)) {
+          addOrUpdateLocalBook({ id: book.id, coverUrl });
+        }
+      })
+      .catch((err) => console.warn('Cover lookup failed:', err));
+  }, []);
 
   const commitDelete = async (id: string) => {
     deleteTimers.current.delete(id);
@@ -499,6 +527,7 @@ export default function Home() {
                 }}
                 onDelete={handleDeleteBook}
                 onSetStatus={handleSetStatus}
+                onCoverUnavailable={handleCoverUnavailable}
               />
             ))}
           </div>
