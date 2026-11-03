@@ -179,66 +179,140 @@ export function cleanAuthorName(name: string): string {
   return withoutDates;
 }
 
-// Direct search Knihovny.cz API
-export async function searchKnihovnyCz(isbn: string): Promise<BookSearchResult[]> {
+// Pull the code out of a catalog ISBN entry such as "978-80-7258-989-0 (brož.)"
+// — normalizing the whole string would keep an "x" from qualifiers like "(box)".
+export function catalogCode(entry: string): string {
+  const match = entry.match(/[0-9][0-9\-\s]{7,15}[0-9Xx]/);
+  return match ? normalizeISBNInput(match[0]) : '';
+}
+
+function isbn10To13(isbn10: string): string {
+  const base = `978${isbn10.slice(0, 9)}`;
+  let sum = 0;
+  for (let i = 0; i < 12; i++) sum += Number(base[i]) * (i % 2 === 0 ? 1 : 3);
+  return base + String((10 - (sum % 10)) % 10);
+}
+
+// Compare codes across ISBN-10 / ISBN-13 forms of the same book.
+function comparableCode(code: string): string {
+  return code.length === 10 && isValidISBN10(code) ? isbn10To13(code) : code;
+}
+
+// Knihovny.cz only returns the fields it is asked for — without these the
+// records come back without ISBNs, publishers, years or page counts.
+const KNIHOVNY_FIELDS = [
+  'title',
+  'authors',
+  'isbns',
+  'publishers',
+  'publicationDates',
+  'physicalDescriptions',
+  'edition',
+  'subjects',
+  'summary',
+];
+
+function knihovnyUrl(lookfor: string, type: string, limit: number): string {
+  const fields = KNIHOVNY_FIELDS.map((f) => `&field[]=${f}`).join('');
+  return `https://www.knihovny.cz/api/v1/search?lookfor=${encodeURIComponent(lookfor)}&type=${type}&limit=${limit}${fields}`;
+}
+
+const firstString = (value: unknown): string =>
+  Array.isArray(value) ? (value.length ? String(value[0]) : '') : value ? String(value) : '';
+
+// Catalog values keep ISBD punctuation: "Albatros," / "Praha :".
+const stripTrailingPunctuation = (value: string) => value.replace(/[\s,;:/]+$/, '').trim();
+
+function mapKnihovnyRecord(rec: Record<string, unknown>, coverIsbn: string): BookSearchResult {
+  const authorsObj = rec.authors as { primary?: Record<string, unknown>; secondary?: Record<string, unknown> } | undefined;
+  const primaryAuthor = authorsObj?.primary ? Object.keys(authorsObj.primary)[0] || '' : '';
+  const secondaryAuthors = authorsObj?.secondary ? Object.keys(authorsObj.secondary) : [];
+  const author = [primaryAuthor, ...secondaryAuthors].map(cleanAuthorName).filter(Boolean).join(', ');
+
+  const publishers = rec.publishers;
+  const publisher = Array.isArray(publishers)
+    ? [...new Set(publishers.map((p) => stripTrailingPunctuation(String(p))).filter(Boolean))].join(', ')
+    : stripTrailingPunctuation(String(publishers || ''));
+  const yearMatch = firstString(rec.publicationDates).match(/\d{4}/);
+  const subjects = rec.subjects;
+  const genre = Array.isArray(subjects) ? subjects.flat().slice(0, 3).join(', ') : '';
+  const summary = rec.summary;
+  const description = Array.isArray(summary) ? summary.join(' ') : String(summary || '');
+  const pagesMatch = firstString(rec.physicalDescriptions).match(/(\d+)\s*(?:stran|stránek|s\.|pages|p\.)/i);
+  const isbns = Array.isArray(rec.isbns) ? rec.isbns.map((i) => catalogCode(String(i))).filter(Boolean) : [];
+  const isbn = coverIsbn || isbns[0] || '';
+
+  return {
+    title: String(rec.title || rec.cleanTitle || ''),
+    author,
+    genre,
+    publisher,
+    publishedYear: yearMatch ? yearMatch[0] : '',
+    edition: stripTrailingPunctuation(firstString(rec.edition)),
+    pageCount: pagesMatch ? Number(pagesMatch[1]) : null,
+    isbn,
+    description,
+    coverUrl: isbn ? `https://www.knihovny.cz/Cover/Show?isbn=${encodeURIComponent(isbn)}&size=medium` : '',
+  };
+}
+
+async function fetchKnihovnyRecords(url: string): Promise<Record<string, unknown>[]> {
   try {
-    const cleanedIsbn = isbn.replace(/[^0-9X]/gi, '');
-    if (!cleanedIsbn) return [];
-
-    const res = await fetch(`https://www.knihovny.cz/api/v1/search?lookfor=${encodeURIComponent(cleanedIsbn)}&type=ISN`, {
-      headers: { Accept: 'application/json' },
-    });
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
     if (!res.ok) return [];
-
     const contentType = res.headers.get('content-type') || '';
     if (!contentType.includes('json')) return [];
-
     const data = await res.json();
-    if (!data || !data.records || !Array.isArray(data.records) || data.records.length === 0) {
-      return [];
-    }
-
-    return data.records.map((rec: Record<string, unknown>) => {
-      const authorsObj = rec.authors as { primary?: Record<string, unknown>; secondary?: Record<string, unknown> } | undefined;
-      const primaryAuthor = authorsObj?.primary ? Object.keys(authorsObj.primary)[0] || '' : '';
-      const secondaryAuthors = authorsObj?.secondary ? Object.keys(authorsObj.secondary) : [];
-      const author = [primaryAuthor, ...secondaryAuthors].map(cleanAuthorName).filter(Boolean).join(', ');
-
-      const title = (rec.title || rec.cleanTitle || '') as string;
-      const publishers = rec.publishers;
-      const publisher = Array.isArray(publishers) ? publishers.join(', ') : ((publishers || '') as string);
-      const pubDates = rec.publicationDates;
-      const publishedYear = Array.isArray(pubDates) ? String(pubDates[0]) : pubDates ? String(pubDates) : '';
-      const subjects = rec.subjects;
-      const genre = Array.isArray(subjects) ? subjects.flat().slice(0, 3).join(', ') : '';
-      const summary = rec.summary;
-      const description = Array.isArray(summary) ? summary.join(' ') : ((summary || '') as string);
-      const isbns = rec.isbns;
-      const recIsbn = Array.isArray(isbns) && isbns[0] ? normalizeISBNInput(String(isbns[0])) : cleanedIsbn;
-
-      return {
-        title,
-        author,
-        genre,
-        publisher,
-        publishedYear: publishedYear ? publishedYear.substring(0, 4) : '',
-        edition: '',
-        pageCount: null,
-        isbn: recIsbn || cleanedIsbn,
-        description,
-        coverUrl: `https://www.knihovny.cz/Cover/Show?isbn=${encodeURIComponent(cleanedIsbn)}&size=medium`,
-      };
-    });
+    return Array.isArray(data?.records) ? data.records : [];
   } catch (err) {
     console.error('Knihovny.cz API search error:', err);
     return [];
   }
 }
 
+// Direct search Knihovny.cz API by ISBN/EAN. The ISN index also matches
+// records that merely mention the code somewhere, so only records that list
+// the code among their own ISBNs are kept.
+export async function searchKnihovnyCz(isbn: string): Promise<BookSearchResult[]> {
+  const code = normalizeISBNInput(isbn);
+  if (!code) return [];
+  const wanted = comparableCode(code);
+
+  const records = await fetchKnihovnyRecords(knihovnyUrl(code, 'ISN', 20));
+  return records
+    .filter((rec) => {
+      const isbns = Array.isArray(rec.isbns) ? rec.isbns : [];
+      // Records fetched without the isbns field (older mocks / API changes)
+      // can't be checked — keep them rather than dropping every result.
+      if (!('isbns' in rec)) return true;
+      return isbns.some((entry) => comparableCode(catalogCode(String(entry))) === wanted);
+    })
+    .map((rec) => mapKnihovnyRecord(rec, code));
+}
+
+// Free-text Knihovny.cz search — the best source for Czech titles recognized
+// from a cover photo.
+export async function searchKnihovnyCzText(query: string): Promise<BookSearchResult[]> {
+  if (!query.trim()) return [];
+  const records = await fetchKnihovnyRecords(knihovnyUrl(query, 'AllFields', 5));
+  return records.map((rec) => mapKnihovnyRecord(rec, ''));
+}
+
+// The keyless Google Books quota runs out regularly (HTTP 429); once it does,
+// stop spending a round trip on it for every query of every scan.
+const GOOGLE_QUOTA_BACKOFF_MS = 10 * 60 * 1000;
+let googleBlockedUntil = 0;
+
+export function resetGoogleBooksBackoff(): void {
+  googleBlockedUntil = 0;
+}
+
 // Direct search Google Books API
 export async function searchGoogleBooks(query: string): Promise<BookSearchResult[]> {
+  if (Date.now() < googleBlockedUntil) return [];
   try {
     const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=5`);
+    if (res.status === 429) googleBlockedUntil = Date.now() + GOOGLE_QUOTA_BACKOFF_MS;
     if (!res.ok) return [];
     const data = await res.json();
     if (!data.items) return [];
@@ -293,6 +367,50 @@ export async function searchOpenLibrary(query: string): Promise<BookSearchResult
   }
 }
 
+interface OpenLibraryEdition {
+  title?: string;
+  subtitle?: string;
+  authors?: Array<{ name?: string }>;
+  publishers?: Array<{ name?: string }>;
+  publish_date?: string;
+  number_of_pages?: number;
+  subjects?: Array<{ name?: string }>;
+  cover?: { medium?: string; large?: string };
+}
+
+// Edition-level Open Library lookup. search.json answers with *work* data
+// (the original title, language and first publication year), which is wrong
+// for a specific edition: the Penguin English "Crime and Punishment" came
+// back as "Преступление и наказание", 1866.
+export async function searchOpenLibraryByISBN(isbn: string): Promise<BookSearchResult[]> {
+  try {
+    const code = normalizeISBNInput(isbn);
+    const res = await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(code)}&format=json&jscmd=data`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    const edition = data?.[`ISBN:${code}`] as OpenLibraryEdition | undefined;
+    if (!edition?.title) return [];
+    const yearMatch = (edition.publish_date || '').match(/\d{4}/);
+    return [
+      {
+        title: edition.subtitle ? `${edition.title}: ${edition.subtitle}` : edition.title,
+        author: (edition.authors || []).map((a) => a.name).filter(Boolean).join(', '),
+        genre: (edition.subjects || []).slice(0, 3).map((s) => s.name).filter(Boolean).join(', '),
+        publisher: (edition.publishers || []).map((p) => p.name).filter(Boolean).join(', '),
+        publishedYear: yearMatch ? yearMatch[0] : '',
+        edition: '',
+        pageCount: edition.number_of_pages || null,
+        isbn: code,
+        description: '',
+        coverUrl: edition.cover?.large || edition.cover?.medium || '',
+      },
+    ];
+  } catch (err) {
+    console.error('OpenLibrary edition lookup error:', err);
+    return [];
+  }
+}
+
 // Catalog lookup by an exact ISBN/EAN, most local source first.
 async function searchByISBN(isbn: string): Promise<BookSearchResult[]> {
   let results = await searchKnihovnyCz(isbn);
@@ -300,19 +418,37 @@ async function searchByISBN(isbn: string): Promise<BookSearchResult[]> {
     results = await searchGoogleBooks(`isbn:${isbn}`);
   }
   if (results.length === 0) {
-    results = await searchOpenLibrary(isbn);
+    results = await searchOpenLibraryByISBN(isbn);
   }
-  return results;
+  return dedupeResults(results);
 }
 
-// Look up a manually entered code. Unlike resolveBookFromText this never
-// falls back to a fuzzy text search: a wrong-but-plausible match is exactly
-// what the user is trying to correct by typing the code in.
-export async function lookupBookByISBN(raw: string): Promise<BookSearchResult | null> {
+// Several catalog records for one code are usually the same book held by
+// different libraries; genuinely different titles (a box-set ISBN shared by
+// every volume) are kept so the user can pick the right one.
+function dedupeResults(results: BookSearchResult[]): BookSearchResult[] {
+  const seen = new Set<string>();
+  return results.filter((r) => {
+    const key = foldText(r.title);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+// Look up a manually entered or scanned code. Unlike resolveBookFromText this
+// never falls back to a fuzzy text search: a wrong-but-plausible match is
+// exactly what the user is trying to correct by typing the code in.
+export async function lookupBooksByISBN(raw: string): Promise<BookSearchResult[]> {
   const isbn = normalizeISBNInput(raw);
-  if (!isValidISBN(isbn)) return null;
-  const [best] = await searchByISBN(isbn);
-  return best ? { ...best, isbn: best.isbn || isbn } : null;
+  if (!isValidISBN(isbn)) return [];
+  const results = await searchByISBN(isbn);
+  return results.map((r) => ({ ...r, isbn: r.isbn || isbn }));
+}
+
+export async function lookupBookByISBN(raw: string): Promise<BookSearchResult | null> {
+  const [best] = await lookupBooksByISBN(raw);
+  return best || null;
 }
 
 // Placeholder title used only when no real catalog match was found — a single
@@ -332,11 +468,99 @@ function isNoiseLine(line: string): boolean {
   return digits > letters;
 }
 
+// OCR of real covers produces lines like "=, b" or "| Za oc® n Ss," — keep
+// only lines with at least one word-like token of 3+ letters.
+function hasRealWord(line: string): boolean {
+  return line.split(/\s+/).some((w) => new RegExp(`^[a-zA-Z${CZ_CHARS}]{3,}$`).test(w));
+}
+
 function cleanLines(text: string): string[] {
   return text
     .split('\n')
     .map((l) => l.trim().replace(new RegExp(`[^a-zA-Z0-9${CZ_CHARS}\\s]`, 'g'), ' ').replace(/\s+/g, ' ').trim())
-    .filter((l) => l.length > 2 && !isNoiseLine(l));
+    .filter((l) => l.length > 2 && !isNoiseLine(l) && hasRealWord(l));
+}
+
+// Lowercase and strip diacritics so "Malý princ" matches OCR's "maly princ".
+function foldText(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+// Articles plus words that appear on so many covers ("KNIHA", "román") that
+// matching them alone says nothing about which book it is.
+const STOP_WORDS = new Set([
+  'the', 'and', 'der', 'die', 'das', 'les', 'des', 'pro', 'nebo', 'jak', 'book', 'books', 'novel',
+  'roman', 'kniha', 'knihy', 'povidky', 'basne', 'sbirka', 'pribehy', 'vybor', 'dil', 'svazek',
+]);
+
+function significantWords(text: string): string[] {
+  const words = foldText(text)
+    .split(' ')
+    .filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
+  return [...new Set(words)];
+}
+
+// A text search always returns *something*; only trust a hit whose title
+// actually appears in what the camera read. Without this, OCR noise such as
+// "D sv. 13" was "confidently" recognized as Vergil's Aeneid.
+// How well a catalog hit explains the OCR text: matched title words count
+// most, a matching author breaks ties ("Malý princ" beats "Princ & princ").
+export function relevanceScore(result: BookSearchResult, ocrText: string): number {
+  if (!isRelevantMatch(result, ocrText)) return 0;
+  const ocrWords = new Set(significantWords(ocrText));
+  const titleHits = significantWords(result.title).filter((w) => ocrWords.has(w)).length;
+  const authorHits = significantWords(result.author).filter((w) => ocrWords.has(w)).length;
+  return titleHits * 10 + Math.min(authorHits, 3) * 3;
+}
+
+export function isRelevantMatch(result: BookSearchResult, ocrText: string): boolean {
+  const ocrWords = new Set(significantWords(ocrText));
+  const coverage = (words: string[]) => words.filter((w) => ocrWords.has(w)).length / words.length;
+
+  const mainTitle = significantWords(result.title.split(/[:/=]/)[0]);
+  const fullTitle = significantWords(result.title);
+  if (mainTitle.length === 0) return false;
+  // A single word ("Bál", "Malý?", "Princ & princ") matches far too many
+  // covers: it needs to be long and the author has to be on the cover too.
+  if (mainTitle.length === 1) {
+    if (mainTitle[0].length < 4) return false;
+    const authorWords = significantWords(result.author);
+    if (!authorWords.some((w) => ocrWords.has(w))) return false;
+  }
+  // The main title must be on the cover, and a long subtitle may not be
+  // completely unrelated to it.
+  return coverage(mainTitle) >= 0.6 && coverage(fullTitle) >= 0.25;
+}
+
+function buildTextQueries(lines: string[]): string[] {
+  // Prefer the alphabetically-richest lines (likely title/author) over
+  // whatever happened to be first/last on the cover — but also try each of
+  // the top lines alone, since one garbled line spoils a combined query.
+  const rankedLines = [...lines].sort((a, b) => b.length - a.length);
+  const firstWords = (line: string | undefined, n: number) => (line || '').split(' ').slice(0, n).join(' ');
+  return [
+    lines.slice(0, 3).join(' '),
+    lines.slice(0, 2).join(' '),
+    lines[0],
+    firstWords(lines[0], 2),
+    rankedLines.slice(0, 2).join(' '),
+    rankedLines[0],
+    lines[1],
+  ]
+    .filter((q, idx, arr) => q && q.length > 2 && arr.indexOf(q) === idx)
+    .slice(0, 6);
+}
+
+// A bare code ("isbn:9990004156548", or what a barcode scanner returns) that
+// extractISBN skips because it isn't a 978/979 ISBN, e.g. a plain EAN-13.
+function codeFromQuery(text: string): string | null {
+  const validation = validateISBNInput(text.replace(/^\s*isbn:/i, ''));
+  return validation?.valid && /^\s*(?:isbn:)?[\s0-9Xx-]+$/i.test(text) ? validation.code : null;
 }
 
 // Resolve a book from already-extracted OCR/typed text, trying ISBN lookups
@@ -346,42 +570,41 @@ function cleanLines(text: string): string[] {
 export async function resolveBookFromText(
   extractedText: string,
   imageFallback?: string
-): Promise<{ result: BookSearchResult; confident: boolean; rawText: string }> {
-  const isbn = extractISBN(extractedText);
-  let searchResults: BookSearchResult[] = [];
+): Promise<{ result: BookSearchResult; confident: boolean; rawText: string; alternatives?: BookSearchResult[] }> {
+  const isbn = extractISBN(extractedText) || codeFromQuery(extractedText);
+  const lines = extractedText ? cleanLines(extractedText) : [];
 
   if (isbn) {
-    searchResults = await searchByISBN(isbn);
-  }
-
-  if (searchResults.length === 0 && extractedText) {
-    const lines = cleanLines(extractedText);
-
-    // Prefer the alphabetically-richest lines (likely title/author) over
-    // whatever happened to be first/last on the cover.
-    const rankedLines = [...lines].sort((a, b) => b.length - a.length);
-
-    const candidateQueries = [lines.slice(0, 3).join(' '), rankedLines.slice(0, 2).join(' '), rankedLines[0]].filter(
-      (q, idx, arr) => q && arr.indexOf(q) === idx
-    );
-
-    for (const query of candidateQueries) {
-      searchResults = await searchGoogleBooks(query);
-      if (searchResults.length === 0) {
-        searchResults = await searchOpenLibrary(query);
-      }
-      if (searchResults.length > 0) break;
+    const byCode = await lookupBooksByISBN(isbn);
+    if (byCode.length > 0) {
+      return {
+        result: { ...byCode[0], coverUrl: byCode[0].coverUrl || imageFallback || '' },
+        confident: true,
+        rawText: extractedText,
+        alternatives: byCode.length > 1 ? byCode : undefined,
+      };
     }
   }
 
-  const bestMatch = searchResults[0];
+  // Collect the best-scoring hit across queries and sources; stop early only
+  // once a hit explains the cover well (2+ title words plus the author).
+  let best: { result: BookSearchResult; score: number } | null = null;
+  search: for (const query of buildTextQueries(lines)) {
+    for (const search of [searchKnihovnyCzText, searchGoogleBooks, searchOpenLibrary]) {
+      for (const candidate of await search(query)) {
+        const score = relevanceScore(candidate, extractedText);
+        if (score > 0 && (!best || score > best.score)) best = { result: candidate, score };
+      }
+      if (best && best.score >= 23) break search;
+    }
+  }
 
-  if (bestMatch) {
+  if (best) {
     return {
       result: {
-        ...bestMatch,
-        isbn: bestMatch.isbn || isbn || '',
-        coverUrl: bestMatch.coverUrl || imageFallback || '',
+        ...best.result,
+        isbn: best.result.isbn || isbn || '',
+        coverUrl: best.result.coverUrl || imageFallback || '',
       },
       confident: true,
       rawText: extractedText,
@@ -390,11 +613,10 @@ export async function resolveBookFromText(
 
   // No catalog match found — return whatever OCR captured as a low-confidence
   // starting point for manual editing, clearly flagged via `confident: false`.
-  const fallbackLines = extractedText.split('\n').map((l) => l.trim()).filter(Boolean);
   return {
     result: {
-      title: fallbackLines[0] || UNRECOGNIZED_TITLE,
-      author: fallbackLines[1] || '',
+      title: lines[0] || UNRECOGNIZED_TITLE,
+      author: lines[1] || '',
       genre: '',
       publisher: '',
       publishedYear: '',
@@ -409,11 +631,45 @@ export async function resolveBookFromText(
   };
 }
 
+export interface BarcodeResolution {
+  result: BookSearchResult;
+  confident: boolean;
+  alternatives?: BookSearchResult[];
+}
+
+// Resolve a decoded barcode. Codes failing the checksum (misreads, library
+// stickers, CODE_128 shelf labels) return null so the scanner keeps looking
+// instead of opening the form with garbage; a valid code the catalogs don't
+// know still opens the form with just the ISBN filled in.
+export async function resolveBookFromBarcode(text: string): Promise<BarcodeResolution | null> {
+  const validation = validateISBNInput(text);
+  if (!validation?.valid) return null;
+  const found = await lookupBooksByISBN(validation.code);
+  if (found.length > 0) {
+    return { result: found[0], confident: true, alternatives: found.length > 1 ? found : undefined };
+  }
+  return {
+    result: {
+      title: '',
+      author: '',
+      genre: '',
+      publisher: '',
+      publishedYear: '',
+      edition: '',
+      pageCount: null,
+      isbn: validation.code,
+      description: '',
+      coverUrl: '',
+    },
+    confident: false,
+  };
+}
+
 // Perform client-side OCR on image string or process direct text query
 export async function processImageOrQuery(input: {
   image?: string;
   query?: string;
-}): Promise<{ result: BookSearchResult; confident: boolean; rawText?: string }> {
+}): Promise<{ result: BookSearchResult; confident: boolean; rawText?: string; alternatives?: BookSearchResult[] }> {
   let extractedText = '';
 
   if (input.query) {

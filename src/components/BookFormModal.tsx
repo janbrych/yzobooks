@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Save, Search, RefreshCw, Star, ScanBarcode, CheckCircle2, AlertTriangle, ImageIcon } from 'lucide-react';
-import { processImageOrQuery, lookupBookByISBN, validateISBNInput, BookSearchResult } from '@/lib/scanner';
+import { processImageOrQuery, lookupBooksByISBN, validateISBNInput, BookSearchResult } from '@/lib/scanner';
 import { findAuthorPhotoUrl, findCoverUrl } from '@/lib/bookMedia';
 import { BookCover, AuthorAvatar } from '@/components/BookImages';
 import { ReadToggle } from '@/components/ReadToggle';
@@ -28,8 +28,15 @@ interface BookFormModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (formData: Record<string, unknown>) => Promise<void>;
-  initialData?: Partial<BookFormData> | null;
+  initialData?: BookFormInitialData | null;
 }
+
+export type BookFormInitialData = Partial<BookFormData> & {
+  // Other catalog titles sharing the code (e.g. a box-set ISBN).
+  alternatives?: BookSearchResult[];
+  // Message about the recognition shown next to the ISBN field.
+  notice?: string;
+};
 
 const EMPTY_FORM: BookFormData = {
   title: '',
@@ -64,10 +71,15 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
   const [codeLookupMessage, setCodeLookupMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [isLoadingCover, setIsLoadingCover] = useState(false);
   const [isLoadingAuthorPhoto, setIsLoadingAuthorPhoto] = useState(false);
+  const [alternatives, setAlternatives] = useState<BookSearchResult[]>([]);
 
   // Bumped whenever a new book is loaded into the form, so image lookups
   // still in flight for the previous one don't overwrite the new data.
   const mediaRequestRef = useRef(0);
+  // Code whose catalog record currently fills the form (null when the data
+  // was typed by hand or belongs to a saved book). Used to clear that stale
+  // record when a different code turns out to be unknown.
+  const catalogCodeRef = useRef<string | null>(null);
 
   const loadMedia = useCallback(
     async (book: Pick<BookFormData, 'isbn' | 'author' | 'coverUrl' | 'authorPhotoUrl'>, opts: { cover: boolean; author: boolean }) => {
@@ -109,11 +121,13 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
     mediaRequestRef.current++;
     setIsLoadingCover(false);
     setIsLoadingAuthorPhoto(false);
-    setCodeLookupMessage(null);
+    setCodeLookupMessage(initialData?.notice ? { ok: false, text: initialData.notice } : null);
+    setAlternatives(initialData?.alternatives || []);
     setSearchQuery('');
 
     if (!initialData) {
       setFormData(EMPTY_FORM);
+      catalogCodeRef.current = null;
       return;
     }
 
@@ -134,6 +148,7 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
       rating: initialData.rating || 0,
     };
     setFormData(data);
+    catalogCodeRef.current = !data.id && data.isbn && data.title ? data.isbn : null;
 
     // Freshly recognized books (and older saved ones) usually come without an
     // internet cover or author portrait — look those up in the background.
@@ -203,38 +218,54 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
     }
   };
 
-  // Re-identify the book from a manually typed ISBN/EAN. The previous
+  // Replace the bibliographic data with a catalog record. The previous
   // (mis)recognition is replaced wholesale — keeping stale fields from the
   // wrong book would be worse than leaving them empty.
+  const applyCatalogBook = (found: BookSearchResult, code: string) => {
+    const next: BookFormData = {
+      ...formData,
+      title: found.title,
+      author: found.author,
+      genre: found.genre,
+      publisher: found.publisher,
+      publishedYear: found.publishedYear,
+      edition: found.edition,
+      pageCount: found.pageCount ? String(found.pageCount) : '',
+      isbn: found.isbn || code,
+      description: found.description,
+      coverUrl: found.coverUrl || '',
+      authorPhotoUrl: '',
+    };
+    setFormData(next);
+    catalogCodeRef.current = next.isbn;
+    loadMedia(next, { cover: true, author: true });
+  };
+
+  // Re-identify the book from a manually typed ISBN/EAN.
   const handleLookupByCode = async () => {
     if (!codeValidation?.valid) return;
     setIsLookingUpCode(true);
     setCodeLookupMessage(null);
+    setAlternatives([]);
     try {
-      const found = await lookupBookByISBN(codeValidation.code);
+      const results = await lookupBooksByISBN(codeValidation.code);
+      const [found] = results;
       if (!found) {
-        setFormData((prev) => ({ ...prev, isbn: codeValidation.code }));
+        // Data looked up for another code describes a different book — drop
+        // it. Hand-typed fields and saved books are kept as they are.
+        const staleCatalogData = catalogCodeRef.current !== null && catalogCodeRef.current !== codeValidation.code;
+        const next: BookFormData = staleCatalogData
+          ? { ...EMPTY_FORM, id: formData.id, status: formData.status, rating: formData.rating, isbn: codeValidation.code }
+          : { ...formData, isbn: codeValidation.code };
+        catalogCodeRef.current = null;
+        setFormData(next);
         setCodeLookupMessage({ ok: false, text: 'Pro tento kód jsme v katalozích nic nenašli. Doplňte prosím údaje ručně.' });
-        loadMedia({ ...formData, isbn: codeValidation.code, coverUrl: '' }, { cover: true, author: false });
+        loadMedia({ ...next, coverUrl: staleCatalogData ? '' : next.coverUrl }, { cover: true, author: false });
         return;
       }
-      const next: BookFormData = {
-        ...formData,
-        title: found.title,
-        author: found.author,
-        genre: found.genre,
-        publisher: found.publisher,
-        publishedYear: found.publishedYear,
-        edition: found.edition,
-        pageCount: found.pageCount ? String(found.pageCount) : '',
-        isbn: found.isbn || codeValidation.code,
-        description: found.description,
-        coverUrl: found.coverUrl || '',
-        authorPhotoUrl: '',
-      };
-      setFormData(next);
+      applyCatalogBook(found, codeValidation.code);
+      setAlternatives(results.length > 1 ? results : []);
       setCodeLookupMessage({ ok: true, text: `Načteno: ${found.title || 'kniha'}` });
-      loadMedia(next, { cover: true, author: true });
     } catch (err) {
       console.error(err);
       setCodeLookupMessage({ ok: false, text: 'Vyhledání se nezdařilo. Zkuste to prosím znovu.' });
@@ -367,6 +398,34 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
             </div>
           </div>
         </section>
+
+        {alternatives.length > 1 && (
+          <section aria-label="Další tituly se stejným kódem" className="bg-amber-950/30 border border-amber-800/50 rounded-2xl p-3">
+            <p className="text-[11px] text-amber-300 mb-2">
+              Pod tímto kódem je v katalogu víc titulů (např. ISBN celé sady). Vyberte ten správný:
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {alternatives.map((alt, idx) => {
+                const selected = alt.title === formData.title;
+                return (
+                  <button
+                    type="button"
+                    key={`${alt.title}-${idx}`}
+                    aria-pressed={selected}
+                    onClick={() => applyCatalogBook(alt, alt.isbn)}
+                    className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors ${
+                      selected
+                        ? 'bg-amber-500 border-amber-400 text-slate-950 font-semibold'
+                        : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-amber-500'
+                    }`}
+                  >
+                    {alt.title}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           {/* Manual code entry — the fix for a wrongly recognized book */}

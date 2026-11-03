@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, RefreshCw, X, Check, Sparkles } from 'lucide-react';
-import { processImageOrQuery, extractISBN, BookSearchResult } from '@/lib/scanner';
+import { processImageOrQuery, resolveBookFromBarcode, BookSearchResult, type BarcodeResolution } from '@/lib/scanner';
 import { enhanceCanvasForOcr } from '@/lib/imagePreprocessing';
 import {
   MultiFormatReader,
@@ -89,6 +89,23 @@ export interface BookData extends Partial<BookSearchResult> {
   id?: string;
   status?: string;
   rating?: number | null;
+  // Other catalog titles sharing the scanned code (box-set ISBNs), offered
+  // in the form so the user can pick the right one.
+  alternatives?: BookSearchResult[];
+  // Shown next to the ISBN field when the scan needs a manual check.
+  notice?: string;
+}
+
+// A barcode photo shows the back cover, so unlike an OCR'd front cover it is
+// never used as the book's cover image — the form looks one up instead.
+function barcodeToBookData(scanned: BarcodeResolution): BookData {
+  return {
+    ...scanned.result,
+    alternatives: scanned.alternatives,
+    notice: scanned.confident
+      ? undefined
+      : `Kód ${scanned.result.isbn} jsme v katalozích nenašli. Doplňte prosím údaje ručně.`,
+  };
 }
 
 interface CameraModalProps {
@@ -286,20 +303,11 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
 
           // 1. Try real-time EAN-13 / barcode scanning first
           const detectedText = decodeBarcodeFromCanvas(canvas);
-          if (detectedText) {
-            const isbn = extractISBN(detectedText) || detectedText;
-            if (isbn && isbn.length >= 9) {
-              const bookResult = await processImageOrQuery({ query: `isbn:${isbn}` });
-              if (bookResult && bookResult.result && !isCancelled) {
-                onRecognized({
-                  ...bookResult.result,
-                  isbn: bookResult.result.isbn || isbn,
-                  coverUrl: bookResult.result.coverUrl || frameData,
-                });
-                handleClose();
-                return;
-              }
-            }
+          const scanned = detectedText ? await resolveBookFromBarcode(detectedText) : null;
+          if (scanned && !isCancelled) {
+            onRecognized(barcodeToBookData(scanned));
+            handleClose();
+            return;
           }
 
           // 2. Fallback to OCR auto scan if no barcode found. OCR runs on a
@@ -386,20 +394,11 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
           if (ctx) {
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             const detectedText = decodeBarcodeFromCanvas(canvas);
-            if (detectedText) {
-              const isbn = extractISBN(detectedText) || detectedText;
-              if (isbn && isbn.length >= 9) {
-                const bookResult = await processImageOrQuery({ query: `isbn:${isbn}` });
-                if (bookResult && bookResult.result) {
-                  onRecognized({
-                    ...bookResult.result,
-                    isbn: bookResult.result.isbn || isbn,
-                    coverUrl: bookResult.result.coverUrl || capturedImage,
-                  });
-                  handleClose();
-                  return;
-                }
-              }
+            const scanned = detectedText ? await resolveBookFromBarcode(detectedText) : null;
+            if (scanned) {
+              onRecognized(barcodeToBookData(scanned));
+              handleClose();
+              return;
             }
             // No barcode found — reuse the same drawn canvas to produce an
             // OCR-enhanced version of the photo (better text recognition).
@@ -433,7 +432,14 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
 
       // Fallback to client-side recognition (for GitHub Pages / static export,
       // server offline, or when the server call above found no confident match)
-      const clientResult = await processImageOrQuery({ image: ocrImage });
+      let clientResult = await processImageOrQuery({ image: ocrImage });
+      if (!clientResult.confident && ocrImage !== capturedImage) {
+        // The contrast enhancement helps most photos but wrecks some
+        // stylized covers (it lost "Malý" from "Malý princ") — give the
+        // untouched photo one more try before giving up.
+        const rawResult = await processImageOrQuery({ image: capturedImage });
+        if (rawResult.confident) clientResult = rawResult;
+      }
       if (clientResult && clientResult.result) {
         onRecognized({
           ...clientResult.result,

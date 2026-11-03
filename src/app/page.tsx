@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Camera, Plus, Search, LogOut, Maximize, Minimize, BookOpen, Sparkles } from 'lucide-react';
 import { BookCard } from '@/components/BookCard';
 import { CameraModal, BookData } from '@/components/CameraModal';
-import { BookFormModal, BookFormData } from '@/components/BookFormModal';
+import { BookFormModal, BookFormData, BookFormInitialData } from '@/components/BookFormModal';
 import { AuthModal } from '@/components/AuthModal';
 import { getLocalBooks, addOrUpdateLocalBook, deleteLocalBook, LocalBook } from '@/lib/localStorage';
 
@@ -21,7 +21,7 @@ export default function Home() {
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
-  const [editingBook, setEditingBook] = useState<Partial<BookFormData> | null>(null);
+  const [editingBook, setEditingBook] = useState<BookFormInitialData | null>(null);
 
   const checkUser = useCallback(async () => {
     try {
@@ -114,7 +114,7 @@ export default function Home() {
   };
 
   const handleRecognizedBook = (recognizedData: BookData) => {
-    setEditingBook(recognizedData as Partial<BookFormData>);
+    setEditingBook(recognizedData as BookFormInitialData);
     setIsFormOpen(true);
   };
 
