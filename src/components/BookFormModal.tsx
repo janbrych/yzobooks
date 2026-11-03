@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Save, Search, RefreshCw, Star, ScanBarcode, CheckCircle2, AlertTriangle, ImageIcon } from 'lucide-react';
+import { X, Save, Search, RefreshCw, Star, ScanBarcode, CheckCircle2, AlertTriangle, ImageIcon, ArrowUpDown } from 'lucide-react';
 import { processImageOrQuery, lookupBooksByISBN, validateISBNInput, BookSearchResult } from '@/lib/scanner';
 import { findAuthorPhotoUrl, findCoverUrl } from '@/lib/bookMedia';
 import { BookCover, AuthorAvatar } from '@/components/BookImages';
@@ -530,7 +530,24 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label htmlFor="author-input" className="block text-xs font-medium text-slate-400 mb-1">Autor</label>
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="author-input" className="block text-xs font-medium text-slate-400">Autor</label>
+                {/* Covers often print the author above the title, so a
+                    misread puts them the wrong way round — one tap fixes it. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = { ...formData, title: formData.author, author: formData.title, authorPhotoUrl: '' };
+                    setFormData(next);
+                    if (next.author) loadMedia(next, { cover: false, author: true });
+                  }}
+                  disabled={!formData.title && !formData.author}
+                  title="Prohodit název a autora"
+                  className="inline-flex items-center gap-1 text-[10px] text-indigo-400 hover:text-indigo-300 disabled:text-slate-600"
+                >
+                  <ArrowUpDown size={11} /> Prohodit s názvem
+                </button>
+              </div>
               <input
                 id="author-input"
                 type="text"

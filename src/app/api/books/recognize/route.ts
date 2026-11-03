@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { Worker } from 'tesseract.js';
 import { getCurrentUser } from '@/lib/auth';
-import { resolveBookFromText } from '@/lib/scanner';
+import { resolveBookFromText, ocrLinesFromBlocks, type OcrLine } from '@/lib/scanner';
 
 export const dynamic = 'force-static';
 
@@ -36,14 +36,16 @@ export async function POST(req: Request) {
     const { image, query: textQuery } = await req.json();
 
     let extractedText = '';
+    let layout: OcrLine[] | undefined;
 
     if (textQuery) {
       extractedText = textQuery;
     } else if (image) {
       try {
         const worker = await getServerOcrWorker();
-        const ret = await worker.recognize(image);
+        const ret = await worker.recognize(image, {}, { text: true, blocks: true });
         extractedText = ret.data.text;
+        layout = ocrLinesFromBlocks(ret.data.blocks);
       } catch (ocrErr) {
         console.error('Tesseract OCR error:', ocrErr);
       }
@@ -53,7 +55,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Nebyla poskytnuta žádná data k vyhodnocení.' }, { status: 400 });
     }
 
-    const { result, confident, rawText } = await resolveBookFromText(extractedText, image);
+    const { result, confident, rawText } = await resolveBookFromText(extractedText, image, layout);
 
     return NextResponse.json({ result, confident, rawText });
   } catch (error) {
