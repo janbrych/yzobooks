@@ -45,7 +45,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 
   try {
     const body = await req.json();
-    const { title, author, genre, publisher, publishedYear, edition, pageCount, isbn, description, coverUrl, authorPhotoUrl, status, rating } = body;
+    const { title, author, genre, publisher, publishedYear, edition, pageCount, isbn, description, coverUrl, authorPhotoUrl, status, rating, shelfId } = body;
 
     const existingBook = await prisma.book.findFirst({
       where: { id, userId: user.userId },
@@ -70,6 +70,8 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
         coverUrl: coverUrl ?? existingBook.coverUrl,
         authorPhotoUrl: authorPhotoUrl ?? existingBook.authorPhotoUrl,
         status: status ?? existingBook.status,
+        // null clears the location, so only skip it when the field is absent
+        shelfId: shelfId !== undefined ? shelfId || null : existingBook.shelfId,
         rating: rating !== undefined ? (rating ? parseInt(String(rating), 10) : null) : existingBook.rating,
       },
     });
