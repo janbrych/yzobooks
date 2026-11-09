@@ -55,7 +55,7 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
           <div className="p-3 bg-indigo-600/10 border border-indigo-500/20 rounded-2xl text-indigo-400">
             <BookOpen size={28} />
           </div>
-          <h2 className="text-xl font-bold text-white">
+          <h2 className="text-xl font-bold text-slate-50">
             {isRegister ? 'Vytvořit účet' : 'Přihlášení do Knihovny'}
           </h2>
           <p className="text-xs text-slate-400">

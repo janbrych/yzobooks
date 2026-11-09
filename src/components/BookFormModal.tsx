@@ -333,7 +333,7 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
           <h2 className="text-lg font-bold text-slate-100">
             {initialData?.id ? 'Upravit knihu' : 'Přidat novou knihu'}
           </h2>
-          <button onClick={onClose} aria-label="Zavřít" className="p-1.5 text-slate-400 hover:text-white rounded-full hover:bg-slate-800">
+          <button onClick={onClose} aria-label="Zavřít" className="p-1.5 text-slate-400 hover:text-slate-50 rounded-full hover:bg-slate-800">
             <X size={20} />
           </button>
         </div>
@@ -380,7 +380,7 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
           </div>
 
           <div className="flex-1 min-w-0 flex flex-col gap-2">
-            <h3 className="font-bold text-base text-white leading-tight line-clamp-3">{formData.title || 'Bez názvu'}</h3>
+            <h3 className="font-bold text-base text-slate-50 leading-tight line-clamp-3">{formData.title || 'Bez názvu'}</h3>
 
             <div className="flex items-center gap-2 min-w-0">
               <div className="relative">
@@ -431,7 +431,7 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
         </section>
 
         {alternatives.length > 1 && (
-          <section aria-label="Další tituly se stejným kódem" className="bg-amber-950/30 border border-amber-800/50 rounded-2xl p-3">
+          <section aria-label="Další tituly se stejným kódem" className="bg-amber-950/30 border border-amber-500/30 rounded-2xl p-3">
             <p className="text-[11px] text-amber-300 mb-2">
               Pod tímto kódem je v katalogu víc titulů (např. ISBN celé sady). Vyberte ten správný:
             </p>

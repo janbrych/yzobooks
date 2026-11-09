@@ -102,7 +102,7 @@ function EditableName({
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => e.key === 'Escape' && setEditing(false)}
-        className="min-w-0 w-40 bg-slate-950 border border-indigo-500/70 rounded-lg px-2 py-1 text-sm text-white focus:outline-none"
+        className="min-w-0 w-40 bg-slate-950 border border-indigo-500/70 rounded-lg px-2 py-1 text-sm text-slate-50 focus:outline-none"
       />
       <button type="submit" aria-label="Uložit název" className="p-1 text-emerald-400 hover:text-emerald-300">
         <Check size={15} />
@@ -281,7 +281,7 @@ export function LocationsScreen() {
         <Link
           href="/"
           aria-label="Zpět do knihovny"
-          className="p-2 text-slate-400 hover:text-white bg-slate-900 border border-slate-800 rounded-xl hover:bg-slate-800 transition-colors"
+          className="p-2 text-slate-400 hover:text-slate-50 bg-slate-900 border border-slate-800 rounded-xl hover:bg-slate-800 transition-colors"
         >
           <ArrowLeft size={18} />
         </Link>
@@ -289,7 +289,7 @@ export function LocationsScreen() {
           <LibraryBig size={20} />
         </div>
         <div className="min-w-0">
-          <h1 className="font-bold text-base text-white leading-none tracking-tight">Regály a police</h1>
+          <h1 className="font-bold text-base text-slate-50 leading-none tracking-tight">Regály a police</h1>
           <p className="text-[10px] font-medium text-slate-400 mt-0.5">
             {plural(locations.length, ['regál', 'regály', 'regálů'])} · {plural(shelfCount, ['police', 'police', 'polic'])} · umístěno {books.length - unplaced.length} z {books.length}
           </p>
@@ -359,7 +359,7 @@ export function LocationsScreen() {
                   <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-800/80 bg-slate-950/40">
                     <span className="h-7 w-1.5 rounded-full bg-gradient-to-b from-amber-400 to-orange-600 shrink-0" aria-hidden />
                     <div className="flex-1 min-w-0">
-                      <EditableName name={c.name} label={`regál ${c.name}`} className="font-semibold text-white" onRename={(n) => setLocations(renameBookcase(locations, c.id, n))} />
+                      <EditableName name={c.name} label={`regál ${c.name}`} className="font-semibold text-slate-50" onRename={(n) => setLocations(renameBookcase(locations, c.id, n))} />
                       <p className="text-[10px] text-slate-500">
                         {plural(c.shelves.length, ['police', 'police', 'polic'])} · {plural(caseBooks, ['kniha', 'knihy', 'knih'])}
                       </p>
@@ -398,7 +398,7 @@ export function LocationsScreen() {
                                 onShelf.map((b) => <BookSpine key={b.id} book={b} onOpen={() => setOpenBookId(b.id)} />)
                               )}
                             </div>
-                            <div aria-hidden className="h-2 rounded-full bg-gradient-to-b from-amber-800/80 to-amber-950 shadow-[0_6px_12px_-4px_rgb(0_0_0/0.6)]" />
+                            <div aria-hidden className="h-2 rounded-full bg-gradient-to-b from-amber-700/80 to-amber-900 shadow-[0_6px_12px_-4px_rgb(0_0_0/0.6)]" />
                           </div>
                         </div>
                       );
@@ -435,10 +435,10 @@ export function LocationsScreen() {
         {picker && (
           <div className="flex flex-col gap-3 p-5">
             <div className="flex items-center justify-between gap-2">
-              <h2 className="font-semibold text-white truncate">
+              <h2 className="font-semibold text-slate-50 truncate">
                 Na polici <span className="text-amber-200">{picker.bookcase.name} → {picker.shelf.name}</span>
               </h2>
-              <button aria-label="Zavřít" onClick={() => setPickerShelf(null)} className="p-1.5 text-slate-400 hover:text-white rounded-full">
+              <button aria-label="Zavřít" onClick={() => setPickerShelf(null)} className="p-1.5 text-slate-400 hover:text-slate-50 rounded-full">
                 <X size={18} />
               </button>
             </div>
@@ -480,13 +480,13 @@ export function LocationsScreen() {
             <div className="flex gap-4 items-start">
               <BookCover src={openBook.coverUrl} title={openBook.title} author={openBook.author} className="w-20 aspect-[2/3] rounded-lg shrink-0 shadow-xl shadow-black/50" />
               <div className="flex-1 min-w-0">
-                <h2 className="font-semibold text-white leading-tight">{openBook.title}</h2>
+                <h2 className="font-semibold text-slate-50 leading-tight">{openBook.title}</h2>
                 <p className="text-xs text-indigo-300 mt-1">{openBook.author || 'Neznámý autor'}</p>
                 <p className="mt-2 flex items-center gap-1 text-xs font-medium text-amber-200">
                   <MapPin size={12} /> {formatLocation(locations, openBook.shelfId) || <span className="text-slate-500">Bez umístění</span>}
                 </p>
               </div>
-              <button aria-label="Zavřít" onClick={() => setOpenBookId(null)} className="p-1.5 text-slate-400 hover:text-white rounded-full">
+              <button aria-label="Zavřít" onClick={() => setOpenBookId(null)} className="p-1.5 text-slate-400 hover:text-slate-50 rounded-full">
                 <X size={18} />
               </button>
             </div>
