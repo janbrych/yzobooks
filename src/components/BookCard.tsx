@@ -1,10 +1,13 @@
 'use client';
 
 import React, { useRef, useState } from 'react';
-import { BookOpen, Bookmark, CheckCircle2, Trash2, Edit2, X, Star } from 'lucide-react';
+import Link from 'next/link';
+import { BookOpen, Bookmark, CheckCircle2, Trash2, Edit2, X, Star, MapPin } from 'lucide-react';
 import { BookCover, AuthorAvatar } from '@/components/BookImages';
 import { ReadToggle } from '@/components/ReadToggle';
 import { Modal } from '@/components/Modal';
+import { ShelfSelect } from '@/components/ShelfSelect';
+import { formatLocation, type Bookcase } from '@/lib/locations';
 
 export interface Book {
   id: string;
@@ -19,6 +22,7 @@ export interface Book {
   description?: string | null;
   coverUrl?: string | null;
   authorPhotoUrl?: string | null;
+  shelfId?: string | null;
   status: string;
   rating?: number | null;
 }
@@ -33,6 +37,8 @@ interface BookCardProps {
   onDelete: (id: string) => void;
   onSetStatus: (book: Book, status: BookStatus) => void;
   onCoverUnavailable?: (book: Book) => void;
+  locations?: Bookcase[];
+  onSetShelf?: (book: Book, shelfId: string | null) => void;
 }
 
 const STATUS_OPTIONS: { id: BookStatus; label: string; icon: typeof Bookmark; active: string }[] = [
@@ -43,7 +49,7 @@ const STATUS_OPTIONS: { id: BookStatus; label: string; icon: typeof Bookmark; ac
 
 const DELETE_WIDTH = 84;
 
-export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelete, onSetStatus, onCoverUnavailable }: BookCardProps) {
+export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelete, onSetStatus, onCoverUnavailable, locations = [], onSetShelf }: BookCardProps) {
   const [showDetail, setShowDetail] = useState(false);
   const [showFullDescription, setShowFullDescription] = useState(false);
   const [translateX, setTranslateX] = useState(0);
@@ -87,6 +93,8 @@ export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelet
   const isRead = book.status === 'READ';
   const meta = [book.publishedYear, book.pageCount ? `${book.pageCount} str.` : null].filter(Boolean).join(' · ');
   const longDescription = (book.description || '').length > 260;
+  const location = formatLocation(locations, book.shelfId);
+  const hasShelves = locations.some((c) => c.shelves.length > 0);
 
   return (
     <>
@@ -247,6 +255,25 @@ export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelet
                 </button>
               );
             })}
+          </div>
+
+          {/* Where the book physically stands in the library */}
+          <div className="rounded-xl bg-slate-950/50 border border-slate-800/80 p-3 flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor={`shelf-${book.id}`} className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center gap-1">
+                <MapPin size={11} /> Umístění
+              </label>
+              <span className={`text-xs font-medium truncate ${location ? 'text-amber-200' : 'text-slate-500'}`} data-testid="book-location">
+                {location || 'Neurčeno'}
+              </span>
+            </div>
+            {hasShelves && onSetShelf ? (
+              <ShelfSelect id={`shelf-${book.id}`} locations={locations} value={book.shelfId} onChange={(shelfId) => onSetShelf(book, shelfId)} />
+            ) : (
+              <Link href="/regaly" className="text-xs font-medium text-indigo-300 hover:text-indigo-200">
+                Založit regály a police →
+              </Link>
+            )}
           </div>
 
           <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">

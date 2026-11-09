@@ -60,7 +60,7 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
-    const { title, author, genre, publisher, publishedYear, edition, pageCount, isbn, description, coverUrl, authorPhotoUrl, status, rating } = body;
+    const { title, author, genre, publisher, publishedYear, edition, pageCount, isbn, description, coverUrl, authorPhotoUrl, status, rating, shelfId } = body;
 
     if (!title) {
       return NextResponse.json({ error: 'Název knihy je povinný.' }, { status: 400 });
@@ -79,6 +79,7 @@ export async function POST(req: Request) {
         description: description || null,
         coverUrl: coverUrl || null,
         authorPhotoUrl: authorPhotoUrl || null,
+        shelfId: shelfId || null,
         status: status || 'UNREAD',
         rating: rating ? parseInt(String(rating), 10) : null,
         userId: user.userId,

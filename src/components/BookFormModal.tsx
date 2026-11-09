@@ -431,7 +431,7 @@ export function BookFormModal({ isOpen, onClose, onSave, initialData }: BookForm
         </section>
 
         {alternatives.length > 1 && (
-          <section aria-label="Další tituly se stejným kódem" className="bg-amber-950/30 border border-amber-800/50 rounded-2xl p-3">
+          <section aria-label="Další tituly se stejným kódem" className="bg-amber-950/30 border border-amber-500/30 rounded-2xl p-3">
             <p className="text-[11px] text-amber-300 mb-2">
               Pod tímto kódem je v katalogu víc titulů (např. ISBN celé sady). Vyberte ten správný:
             </p>
