@@ -39,3 +39,50 @@ export function enhanceCanvasForOcr(canvas: HTMLCanvasElement): string {
   ctx.putImageData(imageData, 0, 0);
   return canvas.toDataURL('image/jpeg', 0.92);
 }
+
+// Grayscale + min/max contrast stretch of a canvas, optionally inverted.
+function stretchedCopy(source: HTMLCanvasElement, maxSide: number, { enhance, invert }: { enhance: boolean; invert: boolean }): string {
+  const scale = Math.min(1, maxSide / Math.max(source.width, source.height));
+  const canvas = source.ownerDocument.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(source.width * scale));
+  canvas.height = Math.max(1, Math.round(source.height * scale));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return source.toDataURL('image/jpeg', 0.9);
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  if (!enhance) return canvas.toDataURL('image/jpeg', 0.92);
+  enhanceCanvasForOcr(canvas);
+  if (invert) {
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = 255 - data[i];
+      data[i + 1] = 255 - data[i + 1];
+      data[i + 2] = 255 - data[i + 2];
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }
+  return canvas.toDataURL('image/jpeg', 0.92);
+}
+
+// Long side of the first OCR passes. Measured on 100 simulated phone photos
+// of real covers (bench/exp.mjs): Tesseract finds the title as often or more
+// often at 600 px than at full size, in a third of the time — cover type is
+// large, and Tesseract reads best at moderate letter heights.
+export const OCR_SMALL_SIDE = 600;
+
+// The images to OCR, in order; recognition stops at the first confident
+// catalog match. Each pass rescues covers the others miss: the negative reads
+// light text on dark covers, the unprocessed copy keeps colored type that the
+// grayscale stretch flattens, and the full-size pass catches small print.
+// Together they found the title on ~42 % of covers vs. 29 % for the old
+// single full-size pass, at about the same worst-case time.
+export function ocrPasses(canvas: HTMLCanvasElement): string[] {
+  const passes = [
+    stretchedCopy(canvas, OCR_SMALL_SIDE, { enhance: true, invert: false }),
+    stretchedCopy(canvas, OCR_SMALL_SIDE, { enhance: true, invert: true }),
+    stretchedCopy(canvas, OCR_SMALL_SIDE, { enhance: false, invert: false }),
+  ];
+  // Last, because it overwrites the canvas.
+  passes.push(enhanceCanvasForOcr(canvas));
+  return passes;
+}

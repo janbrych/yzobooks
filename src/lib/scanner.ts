@@ -297,7 +297,7 @@ export async function searchKnihovnyCz(isbn: string): Promise<BookSearchResult[]
 // from a cover photo.
 export async function searchKnihovnyCzText(
   query: string,
-  { type = 'AllFields', limit = 5 }: { type?: 'AllFields' | 'Title'; limit?: number } = {}
+  { type = 'AllFields', limit = 5 }: { type?: 'AllFields' | 'Title' | 'Author'; limit?: number } = {}
 ): Promise<BookSearchResult[]> {
   if (!query.trim()) return [];
   const records = await fetchKnihovnyRecords(knihovnyUrl(query, type, limit));
@@ -683,10 +683,39 @@ export function scoreCandidate(result: BookSearchResult, ocrText: string, guess?
   if (score === 0) return 0;
   const ocrWords = ocrWordSet(ocrText);
 
-  if (guess?.title && foldText(mainTitle(result.title)) === foldText(guess.title)) score += 25;
-  if (guess?.author) {
-    const authorWords = new Set(significantWords(guess.author));
-    const resultAuthor = significantWords(result.author);
+  // A title that is only a person's name ("Murakami" by Takashi Murakami,
+  // "Karel Čapek", "Erich Maria Remarque") is a book or poster *about* the
+  // author whose name is on the cover, not the book being scanned — unless
+  // the cover's title line says exactly that.
+  const main = mainTitleWords(result.title);
+  const exactTitle = !!guess?.title && foldText(mainTitle(result.title)) === foldText(guess.title);
+  const ownAuthorWords = new Set(significantWords(result.author));
+  if (main.every((w) => ownAuthorWords.has(w))) return 0;
+  if (!exactTitle && looksLikePersonName(mainTitle(result.title))) score -= 20;
+  // "Formanová, Martina : Nevěra po americku" by a critic, "Jáchym Topol:
+  // Sestra (1994)" (an essay), "[Milan Kundera]": part of the title is the
+  // name printed on the cover but the record's author is someone else.
+  const nameWords = new Set(coverNames(cleanLines(ocrText), guess).flatMap((n) => significantWords(n)));
+  // Only a capitalised segment counts: "Válka s mloky" is a title even when
+  // the cover prints it in capitals that look like a name.
+  const aboutSomeoneOnCover = result.title
+    .split(/[:;=[\]]/)
+    .filter((part) => part.trim() && part.trim().split(/[\s,]+/).every((w) => !/^\p{Ll}/u.test(w)))
+    .map((part) => significantWords(part))
+    .some((part) => part.length > 0 && part.every((w) => nameWords.has(w)) && !part.some((w) => ownAuthorWords.has(w)));
+  if (aboutSomeoneOnCover) return 0;
+
+  if (exactTitle) score += 25;
+  const resultAuthor = significantWords(result.author);
+  const guessAuthorWords = new Set(significantWords(guess?.author || ''));
+  // The guess swapped title and author ("Der Zeitdieb" looks like a name,
+  // the real author "Pratchett" was taken for the title): the record's own
+  // author is on the cover outside the guessed author, so trust the record.
+  const rolesSwapped =
+    mainTitleWords(result.title).some((w) => guessAuthorWords.has(w)) &&
+    resultAuthor.some((w) => ocrWords.has(w) && !guessAuthorWords.has(w));
+  if (guess?.author && !rolesSwapped) {
+    const authorWords = guessAuthorWords;
     const resultTitle = significantWords(result.title);
     // Title words that are really the author's name on the cover don't show
     // the title matches: "Karel Čapek" (a book about him) vs "Bílá nemoc".
@@ -696,11 +725,31 @@ export function scoreCandidate(result: BookSearchResult, ocrText: string, guess?
     score -= titleWordsFromAuthor.length * 10;
     if (resultAuthor.some((w) => authorWords.has(w))) score += 15;
     else if (titleWordsFromAuthor.length > 0) score -= 25;
+  } else if (guess?.author) {
+    score += 15;
   }
   if (result.isbn) score += 5;
   const extraWords = significantWords(result.title).filter((w) => !ocrWords.has(w)).length;
   score -= Math.min(extraWords, 5) * 2;
   return Math.max(score, 1);
+}
+
+const BLURB_LINE = /\b(?:author of|bestselling author|autor(?:ka)? (?:bestselleru|knihy|romanu|románu)|from the author|od autor(?:a|ky))\b/i;
+
+// Names printed on the cover: the guessed author plus any other name-shaped
+// line (the guess can mistake the author for the title and vice versa).
+function coverNames(lines: string[], guess?: CoverGuess): string[] {
+  const names = [
+    ...(guess?.author ? guess.author.split(/\s*,\s*/) : []),
+    ...lines.filter(looksLikePersonName).map(stripStrayTokens),
+  ];
+  const seen = new Set<string>();
+  return names.filter((n) => {
+    const key = foldText(n);
+    if (key.length < 5 || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 // Resolve a book from already-extracted OCR/typed text, trying ISBN lookups
@@ -733,18 +782,30 @@ export async function resolveBookFromText(
   // best-scoring hit; stop early once one explains the cover well.
   type Search = (query: string) => Promise<BookSearchResult[]>;
   const titleSearch: Search = (q) => searchKnihovnyCzText(q, { type: 'Title', limit: 10 });
+  const authorSearch: Search = (q) => searchKnihovnyCzText(q, { type: 'Author', limit: 40 });
   const plan: Array<[string, Search[]]> = [];
   if (guess?.title) plan.push([guess.title, [titleSearch]]);
+  // The author's name is usually the best-read text on a cover (large,
+  // plain type) even when the title is stylised or garbled: list the
+  // author's books and let the title words on the cover pick one.
+  for (const name of coverNames(lines, guess).slice(0, 2)) plan.push([name, [authorSearch]]);
   if (guess?.title && guess.author) plan.push([`${guess.title} ${guess.author}`, [searchGoogleBooks, searchOpenLibrary]]);
   for (const query of buildTextQueries(lines)) plan.push([query, [searchKnihovnyCzText, searchGoogleBooks, searchOpenLibrary]]);
   // An exact title match (+25) on top of the title words is convincing.
   const goodEnough = guess?.title ? 45 : 23;
 
+  // "Author of The Handmaid's Tale", "autor bestselleru Metro 2033": other
+  // books named in a blurb must not be taken for this one.
+  const scoringText = extractedText
+    .split('\n')
+    .filter((line) => !BLURB_LINE.test(line))
+    .join('\n');
+
   let best: { result: BookSearchResult; score: number } | null = null;
   search: for (const [query, searches] of plan) {
     for (const run of searches) {
       for (const candidate of await run(query)) {
-        const score = scoreCandidate(candidate, extractedText, guess);
+        const score = scoreCandidate(candidate, scoringText, guess);
         if (score > 0 && (!best || score > best.score)) best = { result: candidate, score };
       }
       if (best && best.score >= goodEnough) break search;
