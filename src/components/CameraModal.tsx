@@ -3,48 +3,22 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, RefreshCw, X, Check, Sparkles } from 'lucide-react';
 import { processImageOrQuery, resolveBookFromBarcode, BookSearchResult, type BarcodeResolution } from '@/lib/scanner';
-import { enhanceCanvasForOcr } from '@/lib/imagePreprocessing';
+import { ocrPasses } from '@/lib/imagePreprocessing';
 import { toast } from '@/lib/toast';
-import {
-  MultiFormatReader,
-  BarcodeFormat,
-  DecodeHintType,
-  HTMLCanvasElementLuminanceSource,
-  HybridBinarizer,
-  BinaryBitmap,
-} from '@zxing/library';
-
-// Reused across every scan iteration instead of allocating a fresh reader
-// (and hint map) on every single frame — this runs as often as every ~2s
-// during continuous auto-scanning.
-const barcodeHints = new Map();
-barcodeHints.set(DecodeHintType.POSSIBLE_FORMATS, [
-  BarcodeFormat.EAN_13,
-  BarcodeFormat.EAN_8,
-  BarcodeFormat.UPC_A,
-  BarcodeFormat.UPC_E,
-  BarcodeFormat.CODE_128,
-]);
-// Search harder per frame (skewed / partly blurred codes); affordable now
-// that live scanning does nothing but decode barcodes.
-barcodeHints.set(DecodeHintType.TRY_HARDER, true);
+import { decodeLiveFrame, decodePhoto, rgbaToGray, type GrayImage } from '@/lib/barcodeDecode';
 
 const LIVE_SCAN_INTERVAL_MS = 300;
-const LIVE_SCAN_MAX_WIDTH = 960;
+// Frames are read at up to this size: the decoder scales the whole frame down
+// itself and uses the full resolution to read a small code in the centre.
+const LIVE_FRAME_MAX_SIDE = 1920;
 const SCAN_STATUS_IDLE = 'Hledám čárový kód… Obálku vyfoťte tlačítkem.';
-const barcodeReader = new MultiFormatReader();
-barcodeReader.setHints(barcodeHints);
 
-function decodeBarcodeFromCanvas(canvas: HTMLCanvasElement): string | null {
-  try {
-    const luminanceSource = new HTMLCanvasElementLuminanceSource(canvas);
-    const binarizer = new HybridBinarizer(luminanceSource);
-    const binaryBitmap = new BinaryBitmap(binarizer);
-    const result = barcodeReader.decode(binaryBitmap);
-    return result ? result.getText() : null;
-  } catch {
-    return null;
-  }
+function canvasGray(canvas: HTMLCanvasElement): GrayImage | null {
+  const ctx = canvas.getContext('2d');
+  if (!ctx?.getImageData || !canvas.width || !canvas.height) return null;
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  if (!imageData?.data) return null;
+  return rgbaToGray(imageData.data, canvas.width, canvas.height);
 }
 
 // Photos picked from the file input can come straight off a phone's main
@@ -154,6 +128,8 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     return () => clearInterval(timer);
   }, [isAnalyzing]);
   const isScanningRef = useRef<boolean>(false);
+  const frameIndexRef = useRef(0);
+  const lastCodeRef = useRef<string | null>(null);
 
   const stopCameraStream = useCallback(() => {
     sessionIdRef.current += 1;
@@ -175,7 +151,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       let mediaStream: MediaStream;
       try {
         mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
           audio: false,
         });
       } catch (err: unknown) {
@@ -317,13 +293,11 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       }
 
       isScanningRef.current = true;
+      let confirmNow = false;
       try {
         const video = videoRef.current;
         const canvas = canvasRef.current;
-        // A barcode stays readable well below full camera resolution, and a
-        // smaller frame keeps each decode quick enough to run several times a
-        // second.
-        const scale = Math.min(1, LIVE_SCAN_MAX_WIDTH / (video.videoWidth || 640));
+        const scale = Math.min(1, LIVE_FRAME_MAX_SIDE / Math.max(video.videoWidth || 640, video.videoHeight || 480));
         canvas.width = Math.round((video.videoWidth || 640) * scale);
         canvas.height = Math.round((video.videoHeight || 480) * scale);
 
@@ -335,8 +309,17 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
           // catalog searches) takes seconds; running it here blocked the loop
           // so a barcode in view was only checked every few seconds. Covers
           // are recognized from a photo the user takes instead.
-          const detectedText = decodeBarcodeFromCanvas(canvas);
-          if (detectedText && !isCancelled) {
+          const gray = canvasGray(canvas);
+          const detectedText = gray ? decodeLiveFrame(gray, frameIndexRef.current++) : null;
+          // A blurry frame can occasionally decode to a wrong code that still
+          // passes the checksum (benchmark: ~1 % of dark, noisy frames), so a
+          // code only counts once two frames agree. The confirming frame is
+          // read right away, which keeps a clean read under half a second.
+          if (detectedText && detectedText !== lastCodeRef.current) {
+            lastCodeRef.current = detectedText;
+            confirmNow = true;
+          } else if (detectedText && !isCancelled) {
+            lastCodeRef.current = null;
             setScanStatus(`Nalezen kód ${detectedText} – hledám knihu…`);
             const scanned = await resolveBookFromBarcode(detectedText);
             if (scanned && !isCancelled) {
@@ -353,7 +336,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       } finally {
         isScanningRef.current = false;
         if (!isCancelled) {
-          scanTimeout = setTimeout(performAutoScan, LIVE_SCAN_INTERVAL_MS);
+          scanTimeout = setTimeout(performAutoScan, confirmNow ? 0 : LIVE_SCAN_INTERVAL_MS);
         }
       }
     };
@@ -380,7 +363,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     try {
       // Draw the captured photo once, both for barcode decoding and (if that
       // fails) to produce a grayscale/contrast-enhanced copy for OCR.
-      let ocrImage: string = capturedImage;
+      let ocrImages: string[] = [capturedImage];
       if (canvasRef.current) {
         try {
           const img = new Image();
@@ -397,16 +380,17 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            const detectedText = decodeBarcodeFromCanvas(canvas);
+            const gray = canvasGray(canvas);
+            const detectedText = gray ? decodePhoto(gray) : null;
             const scanned = detectedText ? await resolveBookFromBarcode(detectedText) : null;
             if (scanned) {
               onRecognized(barcodeToBookData(scanned));
               handleClose();
               return;
             }
-            // No barcode found — reuse the same drawn canvas to produce an
-            // OCR-enhanced version of the photo (better text recognition).
-            ocrImage = enhanceCanvasForOcr(canvas);
+            // No barcode found — reuse the same drawn canvas for the OCR
+            // passes (small, inverted, unprocessed, full size).
+            ocrImages = ocrPasses(canvas);
           }
         } catch {
           // Barcode/canvas step failed, continue to OCR / API evaluation with the original photo
@@ -419,7 +403,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       const res = await fetch('/api/books/recognize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: ocrImage }),
+        body: JSON.stringify({ image: ocrImages[0] }),
       }).catch(() => null);
 
       if (res && res.ok) {
@@ -427,7 +411,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
         if (data.result && data.confident) {
           onRecognized({
             ...data.result,
-            coverUrl: data.result.coverUrl || capturedImage,
+            coverUrl: !data.result.coverUrl || ocrImages.includes(data.result.coverUrl) ? capturedImage : data.result.coverUrl,
           });
           handleClose();
           return;
@@ -435,19 +419,22 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       }
 
       // Fallback to client-side recognition (for GitHub Pages / static export,
-      // server offline, or when the server call above found no confident match)
-      let clientResult = await processImageOrQuery({ image: ocrImage });
-      if (!clientResult.confident && ocrImage !== capturedImage) {
-        // The contrast enhancement helps most photos but wrecks some
-        // stylized covers (it lost "Malý" from "Malý princ") — give the
-        // untouched photo one more try before giving up.
-        const rawResult = await processImageOrQuery({ image: capturedImage });
-        if (rawResult.confident) clientResult = rawResult;
+      // server offline, or when the server call above found no confident match).
+      // Each pass reads covers the others miss; stop at the first confident
+      // match and otherwise keep the first pass's guess for the form.
+      let clientResult: Awaited<ReturnType<typeof processImageOrQuery>> | null = null;
+      for (const image of ocrImages) {
+        const attempt = await processImageOrQuery({ image });
+        if (!clientResult || attempt.confident) clientResult = attempt;
+        if (attempt.confident) break;
       }
       if (clientResult && clientResult.result) {
+        // Without a catalog cover the recognizer falls back to the image it
+        // read — a small grayscale OCR pass; show the real photo instead.
+        const coverUrl = clientResult.result.coverUrl;
         onRecognized({
           ...clientResult.result,
-          coverUrl: clientResult.result.coverUrl || capturedImage,
+          coverUrl: !coverUrl || ocrImages.includes(coverUrl) ? capturedImage : coverUrl,
         });
         handleClose();
         if (!clientResult.confident) {

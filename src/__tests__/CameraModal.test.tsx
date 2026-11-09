@@ -106,7 +106,7 @@ describe('CameraModal Component Lifecycle & Regression Tests', () => {
 
     // Expect single getUserMedia call, no endless loop
     expect(getUserMediaMock).toHaveBeenCalledWith({
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
       audio: false,
     });
   });

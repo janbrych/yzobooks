@@ -46,3 +46,6 @@ next-env.d.ts
 # local SQLite databases (create with: npx prisma migrate deploy)
 prisma/*.db
 prisma/*.db-journal
+
+# Benchmark cache: covers, OCR output, HTTP responses (large, regenerable)
+/bench/data/
