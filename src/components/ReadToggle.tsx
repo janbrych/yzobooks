@@ -44,7 +44,7 @@ export function ReadToggle({ checked, onChange, compact = false }: ReadTogglePro
       } ${
         checked
           ? 'bg-emerald-500/90 border-emerald-400 text-white shadow-emerald-500/30'
-          : 'bg-slate-900/75 border-slate-600 text-slate-300 hover:text-white hover:border-slate-400'
+          : 'bg-slate-900/75 border-slate-600 text-slate-300 hover:text-slate-50 hover:border-slate-400'
       }`}
     >
       <span

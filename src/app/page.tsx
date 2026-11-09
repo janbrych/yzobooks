@@ -7,6 +7,7 @@ import { CameraModal, BookData } from '@/components/CameraModal';
 import { BookFormModal, BookFormData, BookFormInitialData } from '@/components/BookFormModal';
 import { AuthModal } from '@/components/AuthModal';
 import { Toaster } from '@/components/Toaster';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { toast } from '@/lib/toast';
 import { findCoverForBook } from '@/lib/bookMedia';
 import { getLocalBooks, addOrUpdateLocalBook, deleteLocalBook, LocalBook } from '@/lib/localStorage';
@@ -342,16 +343,18 @@ export default function Home() {
             <BookOpen size={20} />
           </div>
           <div>
-            <h1 className="font-bold text-base text-white leading-none tracking-tight">Knihovna</h1>
+            <h1 className="font-bold text-base text-slate-50 leading-none tracking-tight">Knihovna</h1>
             <p className="text-[10px] font-medium text-slate-400 mt-0.5">{user ? user.email : 'Osobní sbírka'}</p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
+          <ThemeToggle className="p-2 text-slate-400 hover:text-slate-50 bg-slate-900 border border-slate-800 rounded-xl hover:bg-slate-800 transition-colors" />
+
           <button
             onClick={toggleFullscreen}
             title="Přepnout na celou obrazovku"
-            className="p-2 text-slate-400 hover:text-white bg-slate-900 border border-slate-800 rounded-xl hover:bg-slate-800 transition-colors"
+            className="p-2 text-slate-400 hover:text-slate-50 bg-slate-900 border border-slate-800 rounded-xl hover:bg-slate-800 transition-colors"
           >
             {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
           </button>
@@ -442,7 +445,7 @@ export default function Home() {
             <div className="p-4 bg-indigo-600/10 border border-indigo-500/20 rounded-2xl text-indigo-400">
               <BookOpen size={36} />
             </div>
-            <h2 className="text-lg font-bold text-white">Vítejte v AI Knihovně</h2>
+            <h2 className="text-lg font-bold text-slate-50">Vítejte v AI Knihovně</h2>
             <p className="text-xs text-slate-400 max-w-sm">
               Pro zobrazení a správu vaší osobní knihovny se prosím přihlaste nebo si vytvořte účet.
             </p>
@@ -513,7 +516,7 @@ export default function Home() {
               setIsFormOpen(true);
             }}
             title="Přidat ručně"
-            className="p-3.5 text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-full transition-all active:scale-90"
+            className="p-3.5 text-slate-300 hover:text-slate-50 bg-slate-800 hover:bg-slate-700 rounded-full transition-all active:scale-90"
           >
             <Plus size={22} />
           </button>

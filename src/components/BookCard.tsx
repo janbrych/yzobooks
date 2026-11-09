@@ -36,7 +36,7 @@ interface BookCardProps {
 }
 
 const STATUS_OPTIONS: { id: BookStatus; label: string; icon: typeof Bookmark; active: string }[] = [
-  { id: 'UNREAD', label: 'Chci číst', icon: Bookmark, active: 'bg-slate-700 text-white' },
+  { id: 'UNREAD', label: 'Chci číst', icon: Bookmark, active: 'bg-slate-700 text-slate-50' },
   { id: 'READING', label: 'Právě čtu', icon: BookOpen, active: 'bg-indigo-600 text-white' },
   { id: 'READ', label: 'Přečteno', icon: CheckCircle2, active: 'bg-emerald-600 text-white' },
 ];
@@ -199,7 +199,7 @@ export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelet
           <button
             aria-label="Zavřít"
             onClick={() => setShowDetail(false)}
-            className="absolute top-3 right-3 z-10 p-2 text-slate-300 hover:text-white rounded-full bg-black/30 hover:bg-black/50 backdrop-blur transition-colors"
+            className="absolute top-3 right-3 z-10 p-2 text-white/85 hover:text-white rounded-full bg-black/30 hover:bg-black/50 backdrop-blur transition-colors"
           >
             <X size={18} />
           </button>
@@ -212,7 +212,7 @@ export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelet
               className="w-32 sm:w-36 aspect-[2/3] rounded-xl shrink-0 shadow-2xl shadow-black/60 ring-1 ring-white/10 animate-rise"
             />
             <div className="flex flex-col gap-2 flex-1 min-w-0 text-center sm:text-left animate-rise [animation-delay:60ms]">
-              <h2 className="text-xl font-bold text-white leading-tight">{book.title}</h2>
+              <h2 className="text-xl font-bold text-slate-50 leading-tight">{book.title}</h2>
               <div className="flex items-center justify-center sm:justify-start gap-2">
                 <AuthorAvatar src={book.authorPhotoUrl} name={book.author} size={34} />
                 <p className="text-sm font-medium text-indigo-300">{book.author || 'Neznámý autor'}</p>
