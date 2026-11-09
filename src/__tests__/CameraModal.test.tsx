@@ -384,4 +384,25 @@ describe('CameraModal Component Lifecycle & Regression Tests', () => {
       expect(screen.getByText('Chyba při přehrávání videa z kamery.')).toBeInTheDocument();
     });
   });
+
+  it('13. Live scanning only looks for barcodes and never runs cover OCR', async () => {
+    const handleRecognized = vi.fn();
+    render(<CameraModal isOpen={true} onClose={vi.fn()} onRecognized={handleRecognized} />);
+
+    await waitFor(() => expect(getUserMediaMock).toHaveBeenCalledTimes(1));
+    const video = document.querySelector('video')!;
+    await act(async () => {
+      fireEvent(video, new Event('loadedmetadata'));
+    });
+
+    // Several scan iterations (first after 400 ms, then every 300 ms).
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 1300));
+    });
+
+    expect(screen.getByText('Hledám čárový kód… Obálku vyfoťte tlačítkem.')).toBeInTheDocument();
+    expect(scanner.processImageOrQuery).not.toHaveBeenCalled();
+    expect(handleRecognized).not.toHaveBeenCalled();
+  });
 });
+

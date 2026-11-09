@@ -22,8 +22,16 @@ barcodeHints.set(DecodeHintType.POSSIBLE_FORMATS, [
   BarcodeFormat.EAN_13,
   BarcodeFormat.EAN_8,
   BarcodeFormat.UPC_A,
+  BarcodeFormat.UPC_E,
   BarcodeFormat.CODE_128,
 ]);
+// Search harder per frame (skewed / partly blurred codes); affordable now
+// that live scanning does nothing but decode barcodes.
+barcodeHints.set(DecodeHintType.TRY_HARDER, true);
+
+const LIVE_SCAN_INTERVAL_MS = 300;
+const LIVE_SCAN_MAX_WIDTH = 960;
+const SCAN_STATUS_IDLE = 'Hledám čárový kód… Obálku vyfoťte tlačítkem.';
 const barcodeReader = new MultiFormatReader();
 barcodeReader.setHints(barcodeHints);
 
@@ -134,7 +142,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isVideoReady, setIsVideoReady] = useState(false);
-  const autoScanStatus = 'Skenuji čárový kód / obálku...';
+  const [scanStatus, setScanStatus] = useState(SCAN_STATUS_IDLE);
   const [analysisStep, setAnalysisStep] = useState(0);
 
   // Rotate the progress caption while a photo is analyzed — recognition can
@@ -312,56 +320,32 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       try {
         const video = videoRef.current;
         const canvas = canvasRef.current;
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
+        // A barcode stays readable well below full camera resolution, and a
+        // smaller frame keeps each decode quick enough to run several times a
+        // second.
+        const scale = Math.min(1, LIVE_SCAN_MAX_WIDTH / (video.videoWidth || 640));
+        canvas.width = Math.round((video.videoWidth || 640) * scale);
+        canvas.height = Math.round((video.videoHeight || 480) * scale);
 
         const ctx = canvas.getContext('2d');
         if (ctx) {
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const frameData = canvas.toDataURL('image/jpeg', 0.8);
 
-          // 1. Try real-time EAN-13 / barcode scanning first
+          // Live scanning only reads barcodes. Recognizing a cover (OCR +
+          // catalog searches) takes seconds; running it here blocked the loop
+          // so a barcode in view was only checked every few seconds. Covers
+          // are recognized from a photo the user takes instead.
           const detectedText = decodeBarcodeFromCanvas(canvas);
-          const scanned = detectedText ? await resolveBookFromBarcode(detectedText) : null;
-          if (scanned && !isCancelled) {
-            onRecognized(barcodeToBookData(scanned));
-            handleClose();
-            return;
-          }
-
-          // 2. Fallback to OCR auto scan if no barcode found. OCR runs on a
-          // grayscale/contrast-enhanced copy of the frame (better text
-          // recognition); the cover thumbnail still uses the original color frame.
-          const ocrFrameData = enhanceCanvasForOcr(canvas);
-
-          const res = await fetch('/api/books/recognize', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: ocrFrameData }),
-          }).catch(() => null);
-
-          let autoResult = null;
-          if (res && res.ok) {
-            const data = await res.json();
-            if (data.result && data.confident) {
-              autoResult = data.result;
+          if (detectedText && !isCancelled) {
+            setScanStatus(`Nalezen kód ${detectedText} – hledám knihu…`);
+            const scanned = await resolveBookFromBarcode(detectedText);
+            if (scanned && !isCancelled) {
+              onRecognized(barcodeToBookData(scanned));
+              handleClose();
+              return;
             }
-          }
-
-          if (!autoResult) {
-            const clientResult = await processImageOrQuery({ image: ocrFrameData });
-            if (clientResult && clientResult.result && clientResult.confident) {
-              autoResult = clientResult.result;
-            }
-          }
-
-          if (autoResult && !isCancelled) {
-            onRecognized({
-              ...autoResult,
-              coverUrl: autoResult.coverUrl || frameData,
-            });
-            handleClose();
-            return;
+            // Not a valid book code (misread, shelf label) — keep scanning.
+            if (!isCancelled) setScanStatus(SCAN_STATUS_IDLE);
           }
         }
       } catch (err) {
@@ -369,12 +353,13 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       } finally {
         isScanningRef.current = false;
         if (!isCancelled) {
-          scanTimeout = setTimeout(performAutoScan, 2000);
+          scanTimeout = setTimeout(performAutoScan, LIVE_SCAN_INTERVAL_MS);
         }
       }
     };
 
-    scanTimeout = setTimeout(performAutoScan, 1500);
+    setScanStatus(SCAN_STATUS_IDLE);
+    scanTimeout = setTimeout(performAutoScan, 400);
 
     return () => {
       isCancelled = true;
@@ -517,7 +502,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
               {!cameraError && (
                 <div className="absolute top-3 left-3 right-3 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50 flex items-center justify-center gap-2 text-xs text-indigo-300 animate-pulse pointer-events-none">
                   <RefreshCw size={12} className="animate-spin text-indigo-400" />
-                  <span>{autoScanStatus}</span>
+                  <span>{scanStatus}</span>
                 </div>
               )}
               {cameraError && (
