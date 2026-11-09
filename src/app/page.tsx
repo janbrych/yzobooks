@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
-import { Camera, Plus, Search, LogOut, Maximize, Minimize, BookOpen, Sparkles, X } from 'lucide-react';
+import Link from 'next/link';
+import { Camera, Plus, Search, LogOut, Maximize, Minimize, BookOpen, Sparkles, X, LibraryBig } from 'lucide-react';
 import { BookCard, type Book, type BookStatus } from '@/components/BookCard';
 import { CameraModal, BookData } from '@/components/CameraModal';
 import { BookFormModal, BookFormData, BookFormInitialData } from '@/components/BookFormModal';
@@ -10,6 +11,8 @@ import { Toaster } from '@/components/Toaster';
 import { toast } from '@/lib/toast';
 import { findCoverForBook } from '@/lib/bookMedia';
 import { getLocalBooks, addOrUpdateLocalBook, deleteLocalBook, LocalBook } from '@/lib/localStorage';
+import { assignBookShelf, formatLocation } from '@/lib/locations';
+import { useLocations } from '@/lib/useLocations';
 
 type Filter = 'ALL' | 'READING' | 'UNREAD' | 'READ' | 'NOT_READ';
 
@@ -88,6 +91,7 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearch = useDeferredValue(searchQuery.trim());
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [locations] = useLocations();
   const [highlightId, setHighlightId] = useState<string | null>(null);
   // Books removed from view but not yet deleted, so "Vrátit" can bring them back.
   const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set());
@@ -251,6 +255,15 @@ export default function Home() {
     fetchBooks();
   };
 
+  const handleSetShelf = async (book: Book, shelfId: string | null) => {
+    if ((book.shelfId || null) === shelfId) return;
+    setBooks((prev) => prev.map((b) => (b.id === book.id ? { ...b, shelfId } : b)));
+    await assignBookShelf(book.id, shelfId);
+    const where = formatLocation(locations, shelfId);
+    toast(where ? `Umístěno: ${where}` : 'Umístění odebráno', { tone: 'success' });
+    fetchBooks();
+  };
+
   // A card showing the generated title-only cover reports it here: books saved
   // before their cover lookup finished, typed in by hand, or whose cover link
   // died. Find a real cover and store it, so the shelf shows covers, not names.
@@ -348,6 +361,16 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-2">
+          {user && (
+            <Link
+              href="/regaly"
+              title="Regály a police"
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-900 border border-slate-800 rounded-xl hover:bg-slate-800 transition-colors"
+            >
+              <LibraryBig size={16} />
+              <span className="hidden sm:inline">Regály</span>
+            </Link>
+          )}
           <button
             onClick={toggleFullscreen}
             title="Přepnout na celou obrazovku"
@@ -498,6 +521,8 @@ export default function Home() {
                 onDelete={handleDeleteBook}
                 onSetStatus={handleSetStatus}
                 onCoverUnavailable={handleCoverUnavailable}
+                locations={locations}
+                onSetShelf={handleSetShelf}
               />
             ))}
           </div>

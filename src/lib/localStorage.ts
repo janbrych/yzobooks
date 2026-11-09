@@ -13,6 +13,8 @@ export interface LocalBook {
   description: string;
   coverUrl: string;
   authorPhotoUrl?: string;
+  /** Shelf (police) the book stands on — see src/lib/locations.ts. */
+  shelfId?: string | null;
   status: 'UNREAD' | 'READING' | 'READ';
   createdAt: string;
   updatedAt: string;
@@ -72,6 +74,7 @@ export function addOrUpdateLocalBook(bookData: Partial<LocalBook> & { id?: strin
     description: bookData.description || '',
     coverUrl: bookData.coverUrl || '',
     authorPhotoUrl: bookData.authorPhotoUrl || '',
+    shelfId: bookData.shelfId ?? null,
     status: bookData.status || 'UNREAD',
     createdAt: now,
     updatedAt: now,

@@ -30,6 +30,7 @@ model Book {
   description    String?
   coverUrl       String?
   authorPhotoUrl String?
+  shelfId        String? // physical location; bookcases/shelves live client-side
   status         String   @default("UNREAD") // UNREAD, READING, READ
   rating         Int?
   userId         String
