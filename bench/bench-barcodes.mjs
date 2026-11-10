@@ -10,7 +10,8 @@ import path from 'node:path';
 
 installFetchCache();
 const here = import.meta.dirname;
-const books = JSON.parse(readFileSync(path.join(here, 'data', 'dataset.json'), 'utf8'));
+const SUFFIX = process.env.DATASET && process.env.DATASET !== 'dataset' ? '-' + process.env.DATASET : '';
+const books = JSON.parse(readFileSync(path.join(here, 'data', `${process.env.DATASET || 'dataset'}.json`), 'utf8'));
 
 // Deterministic noise so runs are comparable.
 let seed = 42;
@@ -99,7 +100,7 @@ for (const [name, v] of Object.entries(VARIANTS)) {
   console.log(MODE.padEnd(7), name.padEnd(20), `${ok}/${books.length}`, `(${results[name].pct}%)`, wrong ? `WRONG ${wrong}` : '', `${results[name].avgMs} ms`);
 }
 
-writeFileSync(path.join(here, 'data', 'wrong-reads.json'), JSON.stringify(wrongReads, null, 1));
+writeFileSync(path.join(here, 'data', `wrong-reads${SUFFIX}.json`), JSON.stringify(wrongReads, null, 1));
 if (!process.argv.includes('--no-lookup')) {
   const { resolveBookFromBarcode } = await import('../src/lib/scanner.ts');
   const fold = (t) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -118,7 +119,7 @@ if (!process.argv.includes('--no-lookup')) {
   }
   results.lookup = { found, titleOk, authorOk, withCoverUrl: cover, total: books.length };
   console.log('lookup', results.lookup);
-  writeFileSync(path.join(here, 'data', 'lookup-misses.json'), JSON.stringify(misses, null, 1));
+  writeFileSync(path.join(here, 'data', `lookup-misses${SUFFIX}.json`), JSON.stringify(misses, null, 1));
 }
-writeFileSync(path.join(here, 'data', `barcode-results-${MODE}.json`), JSON.stringify(results, null, 1));
+writeFileSync(path.join(here, 'data', `barcode-results-${MODE}${SUFFIX}.json`), JSON.stringify(results, null, 1));
 console.log('http cache', stats);

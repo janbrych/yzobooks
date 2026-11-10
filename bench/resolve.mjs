@@ -11,7 +11,7 @@ const here = import.meta.dirname;
 const variant = process.argv[2] || 'scan';
 const prep = process.argv.find((a) => a.startsWith('--prep='))?.split('=')[1];
 const limit = Number(process.argv.find((a) => a.startsWith('--limit='))?.split('=')[1] || 1e9);
-const books = JSON.parse(readFileSync(path.join(here, 'data', 'dataset.json'), 'utf8'));
+const books = JSON.parse(readFileSync(path.join(here, 'data', `${process.env.DATASET || 'dataset'}.json`), 'utf8'));
 const ocr = JSON.parse(readFileSync(path.join(here, 'data', `ocr-${variant}${prep ? '-' + prep : ''}.json`), 'utf8'));
 const { resolveBookFromText, UNRECOGNIZED_TITLE } = await import(process.env.SCANNER || '../src/lib/scanner.ts');
 
