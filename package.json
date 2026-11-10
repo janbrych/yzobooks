@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "predev": "node scripts/copy-zxing-wasm.mjs",
     "build": "next build",
+    "prebuild": "node scripts/copy-zxing-wasm.mjs",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
@@ -14,6 +16,7 @@
     "@prisma/client": "^5.22.0",
     "@zxing/browser": "^0.2.1",
     "@zxing/library": "^0.23.0",
+    "barcode-detector": "^3.2.3",
     "bcryptjs": "^3.0.3",
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^1.47.0",

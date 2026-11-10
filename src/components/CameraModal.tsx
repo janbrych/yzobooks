@@ -1,17 +1,27 @@
 'use client';
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Camera, RefreshCw, X, Check, Sparkles } from 'lucide-react';
+import { Camera, RefreshCw, X, Check, Sparkles, ScanBarcode, BookImage, Flashlight, Lightbulb } from 'lucide-react';
 import { processImageOrQuery, resolveBookFromBarcode, BookSearchResult, type BarcodeResolution } from '@/lib/scanner';
 import { ocrPasses } from '@/lib/imagePreprocessing';
 import { toast } from '@/lib/toast';
-import { decodeLiveFrame, decodePhoto, rgbaToGray, type GrayImage } from '@/lib/barcodeDecode';
+import { decodeGray, decodePhoto, rgbaToGray, type GrayImage } from '@/lib/barcodeDecode';
+import { GUIDE, GUIDE_DECODE_MAX_SIDE, FULL_DECODE_MAX_SIDE, acceptBookCode, detectBookCode, getDetector, guideRect, visibleRect, type Detector } from '@/lib/fastBarcode';
+import { measurePhoto, photoIssues, PHOTO_ISSUE_TEXT, type PhotoIssue } from '@/lib/photoQuality';
 
-const LIVE_SCAN_INTERVAL_MS = 300;
-// Frames are read at up to this size: the decoder scales the whole frame down
-// itself and uses the full resolution to read a small code in the centre.
-const LIVE_FRAME_MAX_SIDE = 1920;
-const SCAN_STATUS_IDLE = 'Hledám čárový kód… Obálku vyfoťte tlačítkem.';
+export type ScanMode = 'barcode' | 'cover';
+
+// Digital zoom asked of the camera while scanning a code: the book can stay
+// further from the lens, where the camera can still focus on it.
+const BARCODE_ZOOM = 1.6;
+
+const BARCODE_HINT = 'Namiř čárový kód do rámečku';
+const COVER_TIPS = [
+  'Celou přední stranu obálky dej do rámečku',
+  'Drž telefon rovně nad knihou, ne šikmo',
+  'Bez odlesku: lampu dej bokem, ne nad knihu',
+  'Název musí jít přečíst, jinak radši vyfoť kód',
+];
 
 function canvasGray(canvas: HTMLCanvasElement): GrayImage | null {
   const ctx = canvas.getContext('2d');
@@ -99,25 +109,47 @@ function barcodeToBookData(scanned: BarcodeResolution): BookData {
   };
 }
 
+// Camera controls only some browsers expose (Chrome on Android mostly).
+type TrackCapabilities = MediaTrackCapabilities & { zoom?: { min: number; max: number }; torch?: boolean; focusMode?: string[] };
+
 interface CameraModalProps {
   isOpen: boolean;
   onClose: () => void;
   onRecognized: (bookData: BookData) => void;
+  // Which way of adding a book the modal opens in; switchable inside.
+  initialMode?: ScanMode;
 }
 
-export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps) {
+export function CameraModal({ isOpen, onClose, onRecognized, initialMode = 'cover' }: CameraModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const sessionIdRef = useRef<number>(0);
 
+  const [mode, setMode] = useState<ScanMode>(initialMode);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [photoWarnings, setPhotoWarnings] = useState<PhotoIssue[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isVideoReady, setIsVideoReady] = useState(false);
-  const [scanStatus, setScanStatus] = useState(SCAN_STATUS_IDLE);
+  const [foundCode, setFoundCode] = useState<string | null>(null);
   const [analysisStep, setAnalysisStep] = useState(0);
+  const [tipIndex, setTipIndex] = useState(0);
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
+
+  // Each opening starts in the mode the user picked on the main screen.
+  useEffect(() => {
+    if (isOpen) setMode(initialMode);
+  }, [isOpen, initialMode]);
+
+  // Load the barcode detector as soon as the modal opens (the WebAssembly
+  // fallback is ~1 MB), so it is ready when the camera is.
+  useEffect(() => {
+    if (isOpen) getDetector(process.env.NEXT_PUBLIC_BASE_PATH || '').catch(() => null);
+  }, [isOpen]);
 
   // Rotate the progress caption while a photo is analyzed — recognition can
   // take several seconds and a static spinner reads as "stuck".
@@ -127,9 +159,13 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     const timer = setInterval(() => setAnalysisStep((s) => Math.min(s + 1, ANALYSIS_STEPS.length - 1)), 1600);
     return () => clearInterval(timer);
   }, [isAnalyzing]);
-  const isScanningRef = useRef<boolean>(false);
-  const frameIndexRef = useRef(0);
-  const lastCodeRef = useRef<string | null>(null);
+
+  // Cycle the cover-photo tips while framing.
+  useEffect(() => {
+    if (!isOpen || mode !== 'cover' || capturedImage) return;
+    const timer = setInterval(() => setTipIndex((i) => (i + 1) % COVER_TIPS.length), 3200);
+    return () => clearInterval(timer);
+  }, [isOpen, mode, capturedImage]);
 
   const stopCameraStream = useCallback(() => {
     sessionIdRef.current += 1;
@@ -139,6 +175,8 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     }
     setStream(null);
     setIsVideoReady(false);
+    setTorchSupported(false);
+    setTorchOn(false);
   }, []);
 
   const startCameraStream = useCallback(async () => {
@@ -239,6 +277,33 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     };
   }, [stream]);
 
+  // Camera tuning per mode, where the browser allows it: zoom in a little and
+  // keep refocusing for codes, full width for covers.
+  useEffect(() => {
+    const track = stream?.getVideoTracks?.()[0];
+    if (!track?.getCapabilities || !track.applyConstraints) return;
+    let caps: TrackCapabilities;
+    try {
+      caps = track.getCapabilities() as TrackCapabilities;
+    } catch {
+      return;
+    }
+    setTorchSupported(!!caps.torch);
+    const advanced: Record<string, unknown> = {};
+    if (caps.zoom) advanced.zoom = mode === 'barcode' ? Math.min(caps.zoom.max, Math.max(caps.zoom.min, BARCODE_ZOOM)) : caps.zoom.min;
+    if (caps.focusMode?.includes('continuous')) advanced.focusMode = 'continuous';
+    if (Object.keys(advanced).length) track.applyConstraints({ advanced: [advanced as MediaTrackConstraintSet] }).catch(() => null);
+  }, [stream, mode]);
+
+  const toggleTorch = () => {
+    const track = streamRef.current?.getVideoTracks?.()[0];
+    if (!track) return;
+    const next = !torchOn;
+    track
+      .applyConstraints({ advanced: [{ torch: next } as MediaTrackConstraintSet] })
+      .then(() => setTorchOn(next))
+      .catch(() => setTorchSupported(false));
+  };
 
   const capturePhoto = () => {
     if (!videoRef.current || !canvasRef.current || !isVideoReady) return;
@@ -252,6 +317,9 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
     if (ctx) {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      // Tell the user straight away if the photo is too dark or blurred to read.
+      const gray = canvasGray(canvas);
+      setPhotoWarnings(gray ? photoIssues(measurePhoto(gray)) : []);
       setCapturedImage(dataUrl);
       stopCameraStream();
     }
@@ -263,6 +331,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
       const reader = new FileReader();
       reader.onload = async (event) => {
         const rawDataUrl = event.target?.result as string;
+        setPhotoWarnings([]);
         setCapturedImage(await downscaleImageIfNeeded(rawDataUrl));
         stopCameraStream();
       };
@@ -272,88 +341,122 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
 
   const handleClose = useCallback(() => {
     setCapturedImage(null);
+    setPhotoWarnings([]);
     setCameraError(null);
     setIsAnalyzing(false);
+    setFoundCode(null);
     stopCameraStream();
     onClose();
   }, [onClose, stopCameraStream]);
 
-  // Continuous background auto-scanning logic
+  // ISBN mode: read the guide frame of every camera frame until a book code
+  // shows up. One read of a valid ISBN is enough (see acceptBookCode).
   useEffect(() => {
-    if (!isOpen || capturedImage || !isVideoReady || !stream || isAnalyzing) {
+    if (mode !== 'barcode' || !isOpen || capturedImage || !isVideoReady || !stream || isAnalyzing || foundCode) {
       return;
     }
 
-    let isCancelled = false;
-    let scanTimeout: NodeJS.Timeout | null = null;
+    let cancelled = false;
+    let detector: Detector | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const crop = document.createElement('canvas');
+    getDetector(process.env.NEXT_PUBLIC_BASE_PATH || '')
+      .then((d) => {
+        detector = d;
+      })
+      .catch(() => null);
 
-    const performAutoScan = async () => {
-      if (isCancelled || isScanningRef.current || !videoRef.current || !canvasRef.current) {
+    let frameIndex = 0;
+    const readFrame = async (): Promise<string | null> => {
+      const video = videoRef.current;
+      const box = previewRef.current;
+      if (!video?.videoWidth || !box?.clientWidth) return null;
+      // The guide frame, and with the detector every other frame the whole
+      // visible picture (a code held upright doesn't fit the wide guide).
+      const whole = !!detector && frameIndex++ % 2 === 1;
+      const r = (whole ? visibleRect : guideRect)(video.videoWidth, video.videoHeight, box.clientWidth, box.clientHeight);
+      const scale = Math.min(1, (whole ? FULL_DECODE_MAX_SIDE : GUIDE_DECODE_MAX_SIDE) / Math.max(r.width, r.height));
+      crop.width = Math.round(r.width * scale);
+      crop.height = Math.round(r.height * scale);
+      const ctx = crop.getContext('2d', { willReadFrequently: !detector });
+      if (!ctx) return null;
+      ctx.drawImage(video, r.x, r.y, r.width, r.height, 0, 0, crop.width, crop.height);
+      if (detector) return detectBookCode(detector, crop);
+      // Until the detector has loaded (or if it can't), the JavaScript reader
+      // on the guide crop.
+      const gray = canvasGray(crop);
+      return gray ? acceptBookCode(decodeGray(gray)) : null;
+    };
+
+    const scan = async () => {
+      if (cancelled) return;
+      let code: string | null = null;
+      try {
+        code = await readFrame();
+      } catch (err) {
+        console.warn('Barcode scan error:', err);
+      }
+      if (cancelled) return;
+      if (code) {
+        navigator.vibrate?.(40);
+        setFoundCode(code);
         return;
       }
-
-      isScanningRef.current = true;
-      let confirmNow = false;
-      try {
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-        const scale = Math.min(1, LIVE_FRAME_MAX_SIDE / Math.max(video.videoWidth || 640, video.videoHeight || 480));
-        canvas.width = Math.round((video.videoWidth || 640) * scale);
-        canvas.height = Math.round((video.videoHeight || 480) * scale);
-
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-          // Live scanning only reads barcodes. Recognizing a cover (OCR +
-          // catalog searches) takes seconds; running it here blocked the loop
-          // so a barcode in view was only checked every few seconds. Covers
-          // are recognized from a photo the user takes instead.
-          const gray = canvasGray(canvas);
-          const detectedText = gray ? decodeLiveFrame(gray, frameIndexRef.current++) : null;
-          // A blurry frame can occasionally decode to a wrong code that still
-          // passes the checksum (benchmark: ~1 % of dark, noisy frames), so a
-          // code only counts once two frames agree. The confirming frame is
-          // read right away, which keeps a clean read under half a second.
-          if (detectedText && detectedText !== lastCodeRef.current) {
-            lastCodeRef.current = detectedText;
-            confirmNow = true;
-          } else if (detectedText && !isCancelled) {
-            lastCodeRef.current = null;
-            setScanStatus(`Nalezen kód ${detectedText} – hledám knihu…`);
-            const scanned = await resolveBookFromBarcode(detectedText);
-            if (scanned && !isCancelled) {
-              onRecognized(barcodeToBookData(scanned));
-              handleClose();
-              return;
-            }
-            // Not a valid book code (misread, shelf label) — keep scanning.
-            if (!isCancelled) setScanStatus(SCAN_STATUS_IDLE);
-          }
-        }
-      } catch (err) {
-        console.warn('Auto scan iteration error:', err);
-      } finally {
-        isScanningRef.current = false;
-        if (!isCancelled) {
-          scanTimeout = setTimeout(performAutoScan, confirmNow ? 0 : LIVE_SCAN_INTERVAL_MS);
-        }
-      }
+      // Next frame right away: a crop of the guide decodes in a few ms.
+      timer = setTimeout(scan, 30);
     };
-
-    setScanStatus(SCAN_STATUS_IDLE);
-    scanTimeout = setTimeout(performAutoScan, 400);
+    timer = setTimeout(scan, 150);
 
     return () => {
-      isCancelled = true;
-      if (scanTimeout) clearTimeout(scanTimeout);
+      cancelled = true;
+      if (timer) clearTimeout(timer);
     };
-  }, [isOpen, capturedImage, isVideoReady, stream, isAnalyzing, handleClose, onRecognized]);
+  }, [mode, isOpen, capturedImage, isVideoReady, stream, isAnalyzing, foundCode]);
+
+  // The page passes new callbacks on every render; the lookup below must not
+  // restart because of that, so it reads the latest ones from refs.
+  const onRecognizedRef = useRef(onRecognized);
+  const handleCloseRef = useRef(handleClose);
+  useEffect(() => {
+    onRecognizedRef.current = onRecognized;
+    handleCloseRef.current = handleClose;
+  }, [onRecognized, handleClose]);
+
+  // A code was read: look the book up and hand it to the form.
+  useEffect(() => {
+    if (!foundCode) return;
+    let cancelled = false;
+    resolveBookFromBarcode(foundCode)
+      .then((scanned) => {
+        if (cancelled) return;
+        if (scanned) {
+          onRecognizedRef.current(barcodeToBookData(scanned));
+          handleCloseRef.current();
+        } else {
+          setFoundCode(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFoundCode(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [foundCode]);
 
   const handleRetake = () => {
     setCapturedImage(null);
+    setPhotoWarnings([]);
     // Note: Do NOT call startCameraStream() here!
     // Setting capturedImage to null triggers the effect above, which will cleanly call startCameraStream().
+  };
+
+  const switchMode = (next: ScanMode) => {
+    if (next === mode) return;
+    setMode(next);
+    setCapturedImage(null);
+    setPhotoWarnings([]);
+    setFoundCode(null);
   };
 
   const analyzeImage = async () => {
@@ -440,10 +543,10 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
         if (!clientResult.confident) {
           // Still no confident match anywhere — let the user know the form
           // was pre-filled from raw OCR text and needs a manual check.
-          toast('Knihu se nepodařilo jednoznačně rozpoznat – zkontrolujte údaje nebo opište ISBN.', { tone: 'warning', duration: 5000 });
+          toast('Knihu se nepodařilo jednoznačně rozpoznat. Zkontroluj údaje, nebo naskenuj čárový kód.', { tone: 'warning', duration: 5000 });
         }
       } else {
-        toast('Z fotky se nepodařilo knihu rozpoznat.', { tone: 'warning' });
+        toast('Z fotky se nepodařilo knihu rozpoznat. Zkus naskenovat čárový kód.', { tone: 'warning' });
       }
     } catch (err) {
       console.error('Analyze error:', err);
@@ -455,14 +558,29 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
 
   if (!isOpen) return null;
 
+  const modeButton = (value: ScanMode, label: string, Icon: typeof Camera) => (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={mode === value}
+      onClick={() => switchMode(value)}
+      disabled={isAnalyzing}
+      className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-colors ${
+        mode === value ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+      }`}
+    >
+      <Icon size={15} /> {label}
+    </button>
+  );
+
   return (
     <div className="theme-keep-dark fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/90 backdrop-blur-md animate-backdrop-in">
       <div className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[100dvh] animate-sheet-in">
         {/* Header */}
-        <div className="p-4 flex items-center justify-between border-b border-slate-800">
+        <div className="p-4 pb-3 flex items-center justify-between">
           <div className="flex items-center gap-2 text-indigo-400 font-semibold text-sm">
             <Sparkles size={18} />
-            <span>Vyfotit knihu s AI</span>
+            <span>Přidat knihu</span>
           </div>
           <button
             aria-label="Zavřít skenování"
@@ -473,24 +591,80 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
           </button>
         </div>
 
+        {/* Mode switch */}
+        <div role="tablist" aria-label="Způsob přidání" className="mx-4 mb-3 p-1 flex gap-1 bg-slate-950 border border-slate-800 rounded-xl">
+          {modeButton('barcode', 'Čárový kód', ScanBarcode)}
+          {modeButton('cover', 'Obálka', BookImage)}
+        </div>
+
         {/* Camera / Photo area */}
-        <div className="relative aspect-[3/4] w-full bg-slate-950 flex items-center justify-center overflow-hidden">
+        <div ref={previewRef} className="relative aspect-[3/4] w-full bg-slate-950 flex items-center justify-center overflow-hidden">
           {capturedImage ? (
-            <img src={capturedImage} alt="Captured" className="w-full h-full object-cover animate-fadeIn" />
+            <img src={capturedImage} alt="Pořízená fotka" className="w-full h-full object-cover animate-fadeIn" />
           ) : stream ? (
             <>
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-cover"
-              />
-              {!cameraError && (
-                <div className="absolute top-3 left-3 right-3 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-700/50 flex items-center justify-center gap-2 text-xs text-indigo-300 animate-pulse pointer-events-none">
-                  <RefreshCw size={12} className="animate-spin text-indigo-400" />
-                  <span>{scanStatus}</span>
+              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+              {!cameraError && mode === 'barcode' && (
+                <div className="absolute inset-0 pointer-events-none" data-testid="barcode-guide">
+                  {/* the guide frame, everything around it dimmed */}
+                  <div
+                    className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-2xl shadow-[0_0_0_9999px_rgb(2_6_23/0.55)] transition-colors ${
+                      foundCode ? 'ring-4 ring-emerald-400' : ''
+                    }`}
+                    style={{ width: `${GUIDE.width * 100}%`, height: `${GUIDE.height * 100}%` }}
+                  >
+                    {['top-0 left-0 border-t-4 border-l-4 rounded-tl-2xl', 'top-0 right-0 border-t-4 border-r-4 rounded-tr-2xl', 'bottom-0 left-0 border-b-4 border-l-4 rounded-bl-2xl', 'bottom-0 right-0 border-b-4 border-r-4 rounded-br-2xl'].map((c) => (
+                      <span key={c} aria-hidden className={`absolute w-9 h-9 drop-shadow-[0_0_3px_rgb(0_0_0/0.9)] ${foundCode ? 'border-emerald-400' : 'border-white'} ${c}`} />
+                    ))}
+                    {!foundCode && (
+                      <span aria-hidden className="absolute inset-x-4 top-1/2 h-0.5 -translate-y-1/2 rounded-full bg-red-500 shadow-[0_0_12px_2px_rgb(239_68_68/0.8)] animate-pulse" />
+                    )}
+                  </div>
+                  <div className="absolute inset-x-4 bottom-5 flex justify-center">
+                    <span className="inline-flex items-center gap-2 rounded-full bg-slate-950/80 backdrop-blur px-4 py-2 text-xs font-medium text-slate-100">
+                      {foundCode ? (
+                        <>
+                          <RefreshCw size={13} className="animate-spin text-emerald-300" />
+                          Kód {foundCode} načten, hledám knihu…
+                        </>
+                      ) : (
+                        <>
+                          <ScanBarcode size={14} className="text-indigo-300" />
+                          {BARCODE_HINT}
+                        </>
+                      )}
+                    </span>
+                  </div>
                 </div>
+              )}
+              {!cameraError && mode === 'cover' && (
+                <div className="absolute inset-0 pointer-events-none" data-testid="cover-guide">
+                  {/* outline of a book cover (2:3) to fill */}
+                  <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[72%] aspect-[2/3]">
+                    {['top-0 left-0 border-t-2 border-l-2', 'top-0 right-0 border-t-2 border-r-2', 'bottom-0 left-0 border-b-2 border-l-2', 'bottom-0 right-0 border-b-2 border-r-2'].map((c) => (
+                      <span key={c} aria-hidden className={`absolute w-8 h-8 rounded-sm border-white drop-shadow-[0_0_3px_rgb(0_0_0/0.9)] ${c}`} />
+                    ))}
+                  </div>
+                  <div className="absolute top-3 inset-x-3 flex justify-center">
+                    <span key={tipIndex} className="inline-flex items-center gap-2 rounded-full bg-slate-950/80 backdrop-blur px-3 py-1.5 text-xs text-slate-100 animate-rise">
+                      <Lightbulb size={13} className="text-amber-300 shrink-0" />
+                      {COVER_TIPS[tipIndex]}
+                    </span>
+                  </div>
+                </div>
+              )}
+              {torchSupported && !cameraError && (
+                <button
+                  type="button"
+                  onClick={toggleTorch}
+                  aria-pressed={torchOn}
+                  aria-label={torchOn ? 'Vypnout přisvícení' : 'Zapnout přisvícení'}
+                  className={`absolute right-3 ${mode === 'cover' ? 'bottom-3' : 'top-3'} p-2.5 rounded-full backdrop-blur border transition-colors ${
+                    torchOn ? 'bg-amber-300 text-slate-900 border-amber-200' : 'bg-slate-950/70 text-slate-100 border-slate-700'
+                  }`}
+                >
+                  <Flashlight size={18} />
+                </button>
               )}
               {cameraError && (
                 <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-6 text-center">
@@ -506,6 +680,17 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
           )}
 
           <canvas ref={canvasRef} className="hidden" />
+
+          {/* Photo problems found before analysis */}
+          {capturedImage && photoWarnings.length > 0 && !isAnalyzing && (
+            <div className="absolute inset-x-3 top-3 flex flex-col gap-1.5" role="status">
+              {photoWarnings.map((w) => (
+                <span key={w} className="rounded-xl bg-amber-400/95 text-slate-950 px-3 py-2 text-xs font-medium shadow-lg">
+                  {PHOTO_ISSUE_TEXT[w]}
+                </span>
+              ))}
+            </div>
+          )}
 
           {/* AI Loader Overlay */}
           {isAnalyzing && (
@@ -547,8 +732,18 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
                 disabled={isAnalyzing}
                 className="flex-1 py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm flex items-center justify-center gap-2 transition-colors shadow-lg shadow-indigo-500/25"
               >
-                <Check size={18} /> Vyhodnotit
+                <Check size={18} /> {photoWarnings.length ? 'Přesto vyhodnotit' : 'Vyhodnotit'}
               </button>
+            </>
+          ) : mode === 'barcode' ? (
+            <>
+              <label className="flex-1 py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium text-sm flex items-center justify-center gap-2 cursor-pointer transition-colors text-center">
+                <span>Nahrát fotku kódu</span>
+                <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
+              </label>
+              <p className="flex-1 text-[11px] leading-snug text-slate-400">
+                Kód se načte sám, jakmile je celý v rámečku. Žádné tlačítko není potřeba.
+              </p>
             </>
           ) : (
             <>
@@ -559,6 +754,7 @@ export function CameraModal({ isOpen, onClose, onRecognized }: CameraModalProps)
               <button
                 onClick={capturePhoto}
                 disabled={!stream || !isVideoReady}
+                aria-label="Vyfotit obálku"
                 className="p-4 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/30 transition-transform active:scale-95 disabled:opacity-50"
               >
                 <Camera size={26} />

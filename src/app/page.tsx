@@ -2,9 +2,9 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
 import Link from 'next/link';
-import { Camera, Plus, Search, LogOut, Maximize, Minimize, BookOpen, Sparkles, X, LibraryBig } from 'lucide-react';
+import { Camera, Plus, Search, LogOut, Maximize, Minimize, BookOpen, Sparkles, X, LibraryBig, ScanBarcode } from 'lucide-react';
 import { BookCard, type Book, type BookStatus } from '@/components/BookCard';
-import { CameraModal, BookData } from '@/components/CameraModal';
+import { CameraModal, BookData, type ScanMode } from '@/components/CameraModal';
 import { BookFormModal, BookFormData, BookFormInitialData } from '@/components/BookFormModal';
 import { AuthModal } from '@/components/AuthModal';
 import { Toaster } from '@/components/Toaster';
@@ -112,7 +112,8 @@ export default function Home() {
   const coverRepairQueue = useRef<Promise<void>>(Promise.resolve());
 
   // Modals
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  // Which way of adding a book is open: scanning the barcode or a cover photo.
+  const [cameraMode, setCameraMode] = useState<ScanMode | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [editingBook, setEditingBook] = useState<BookFormInitialData | null>(null);
@@ -520,14 +521,22 @@ export default function Home() {
             <EmptyShelfIllustration />
             <h3 className="font-semibold text-slate-200">Vaše police je zatím prázdná</h3>
             <p className="text-xs text-slate-400 max-w-xs">
-              Vyfoťte obálku nebo čárový kód a kniha se doplní sama — včetně obálky a fotky autora.
+              Naskenujte čárový kód (nejrychlejší) nebo vyfoťte obálku a kniha se doplní sama — včetně obálky a fotky autora.
             </p>
-            <button
-              onClick={() => setIsCameraOpen(true)}
-              className="mt-1 flex items-center gap-2 py-2.5 px-5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm rounded-xl shadow-lg shadow-indigo-500/25 transition-all active:scale-95"
-            >
-              <Camera size={16} /> Přidat první knihu
-            </button>
+            <div className="mt-1 flex flex-wrap justify-center gap-2">
+              <button
+                onClick={() => setCameraMode('barcode')}
+                className="flex items-center gap-2 py-2.5 px-5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm rounded-xl shadow-lg shadow-indigo-500/25 transition-all active:scale-95"
+              >
+                <ScanBarcode size={16} /> Naskenovat kód
+              </button>
+              <button
+                onClick={() => setCameraMode('cover')}
+                className="flex items-center gap-2 py-2.5 px-5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-sm rounded-xl transition-all active:scale-95"
+              >
+                <Camera size={16} /> Vyfotit obálku
+              </button>
+            </div>
           </div>
         ) : visibleBooks.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-14 text-center gap-3 animate-rise">
@@ -583,20 +592,34 @@ export default function Home() {
           </button>
 
           <button
-            onClick={() => setIsCameraOpen(true)}
-            title="Vyfotit knihu"
-            className="group relative flex items-center gap-2 px-5 py-3.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-semibold text-sm rounded-full shadow-lg shadow-indigo-500/30 transition-all active:scale-95 overflow-hidden"
+            onClick={() => setCameraMode('cover')}
+            title="Vyfotit obálku"
+            className="flex items-center gap-2 whitespace-nowrap px-4 py-3.5 text-slate-200 hover:text-slate-50 bg-slate-800 hover:bg-slate-700 font-semibold text-sm rounded-full transition-all active:scale-95"
+          >
+            <Camera size={20} />
+            <span>Obálka</span>
+          </button>
+
+          <button
+            onClick={() => setCameraMode('barcode')}
+            title="Naskenovat čárový kód ISBN"
+            className="group relative flex items-center gap-2 whitespace-nowrap px-5 py-3.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-semibold text-sm rounded-full shadow-lg shadow-indigo-500/30 transition-all active:scale-95 overflow-hidden"
           >
             {/* light sweep on hover */}
             <span aria-hidden className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-700 bg-gradient-to-r from-transparent via-white/20 to-transparent" />
-            <Camera size={22} className="relative" />
-            <span className="relative">Vyfotit</span>
+            <ScanBarcode size={22} className="relative" />
+            <span className="relative">Kód ISBN</span>
           </button>
         </div>
       )}
 
       {/* Modals */}
-      <CameraModal isOpen={isCameraOpen} onClose={() => setIsCameraOpen(false)} onRecognized={handleRecognizedBook} />
+      <CameraModal
+        isOpen={cameraMode !== null}
+        initialMode={cameraMode ?? 'barcode'}
+        onClose={() => setCameraMode(null)}
+        onRecognized={handleRecognizedBook}
+      />
 
       <BookFormModal
         isOpen={isFormOpen}
