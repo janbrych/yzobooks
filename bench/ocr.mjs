@@ -14,7 +14,7 @@ const here = import.meta.dirname;
 const variant = process.argv[2] || 'scan';
 const nWorkers = Number(process.argv.find((a) => a.startsWith('--workers='))?.split('=')[1] || 3);
 const prep = process.env.PREP || 'app'; // preprocessing experiment name
-const books = JSON.parse(readFileSync(path.join(here, 'data', 'dataset.json'), 'utf8'));
+const books = JSON.parse(readFileSync(path.join(here, 'data', `${process.env.DATASET || 'dataset'}.json`), 'utf8'));
 const outFile = path.join(here, 'data', `ocr-${variant}${prep !== 'app' ? '-' + prep : ''}.json`);
 const done = existsSync(outFile) ? JSON.parse(readFileSync(outFile, 'utf8')) : {};
 mkdirSync(path.join(here, 'data', 'photos'), { recursive: true });
