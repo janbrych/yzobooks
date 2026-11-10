@@ -10,6 +10,14 @@ import { AuthModal } from '@/components/AuthModal';
 import { Toaster } from '@/components/Toaster';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { toast } from '@/lib/toast';
+import {
+  enterFullscreen,
+  exitFullscreen,
+  fullscreenElement,
+  isFullscreenSupported,
+  isStandalone,
+  onFullscreenChange,
+} from '@/lib/fullscreen';
 import { findCoverForBook } from '@/lib/bookMedia';
 import { getLocalBooks, addOrUpdateLocalBook, deleteLocalBook, LocalBook } from '@/lib/localStorage';
 import { assignBookShelf, formatLocation } from '@/lib/locations';
@@ -92,6 +100,7 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearch = useDeferredValue(searchQuery.trim());
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showFullscreenButton, setShowFullscreenButton] = useState(true);
   const [locations] = useLocations();
   const [highlightId, setHighlightId] = useState<string | null>(null);
   // Books removed from view but not yet deleted, so "Vrátit" can bring them back.
@@ -148,6 +157,13 @@ export default function Home() {
     checkUser();
   }, [checkUser]);
 
+  // Keep the icon right when fullscreen ends through Esc or a browser gesture,
+  // and hide the button in the installed app, which already fills the screen.
+  useEffect(() => {
+    setShowFullscreenButton(!isStandalone());
+    return onFullscreenChange(() => setIsFullscreen(fullscreenElement() !== null));
+  }, []);
+
   useEffect(() => {
     if (user) {
       fetchBooks();
@@ -176,13 +192,29 @@ export default function Home() {
   };
 
   const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(console.error);
-    } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen().then(() => setIsFullscreen(false)).catch(console.error);
-      }
+    if (fullscreenElement()) {
+      exitFullscreen().catch(console.error);
+      return;
     }
+    if (!isFullscreenSupported()) {
+      // Safari on iPhone can't put a page in fullscreen; the home-screen app can.
+      toast('Tenhle prohlížeč neumí celou obrazovku. Přidej si Knihovnu na plochu: Sdílet → Přidat na plochu.', {
+        tone: 'info',
+        duration: 7000,
+      });
+      return;
+    }
+    // Embedded browsers (in-app webviews) can leave the request pending
+    // forever without switching, so give up after a moment and say so.
+    const refused = () =>
+      toast('Prohlížeč celou obrazovku nepovolil. Zkus to otevřít přímo v Chrome nebo Safari.', { tone: 'warning' });
+    const timer = setTimeout(() => {
+      if (!fullscreenElement()) refused();
+    }, 1500);
+    enterFullscreen().catch(() => {
+      clearTimeout(timer);
+      refused();
+    });
   };
 
   const handleRecognizedBook = (recognizedData: BookData) => {
@@ -375,13 +407,16 @@ export default function Home() {
 
           <ThemeToggle className="p-2 text-slate-400 hover:text-slate-50 bg-slate-900 border border-slate-800 rounded-xl hover:bg-slate-800 transition-colors" />
 
-          <button
-            onClick={toggleFullscreen}
-            title="Přepnout na celou obrazovku"
-            className="p-2 text-slate-400 hover:text-slate-50 bg-slate-900 border border-slate-800 rounded-xl hover:bg-slate-800 transition-colors"
-          >
-            {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
-          </button>
+          {showFullscreenButton && (
+            <button
+              onClick={toggleFullscreen}
+              title={isFullscreen ? 'Ukončit celou obrazovku' : 'Přepnout na celou obrazovku'}
+              aria-pressed={isFullscreen}
+              className="p-2 text-slate-400 hover:text-slate-50 bg-slate-900 border border-slate-800 rounded-xl hover:bg-slate-800 transition-colors"
+            >
+              {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
+            </button>
+          )}
 
           {user ? (
             <button
