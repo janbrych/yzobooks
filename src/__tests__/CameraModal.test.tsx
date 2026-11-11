@@ -11,7 +11,22 @@ vi.mock('lucide-react', () => ({
   X: () => <div data-testid="x-icon" />,
   Check: () => <div data-testid="check-icon" />,
   Sparkles: () => <div data-testid="sparkles-icon" />,
+  ScanBarcode: () => <div data-testid="barcode-icon" />,
+  BookImage: () => <div data-testid="book-image-icon" />,
+  Flashlight: () => <div data-testid="flashlight-icon" />,
+  Lightbulb: () => <div data-testid="lightbulb-icon" />,
 }));
+
+// The fast ISBN detector: no WebAssembly in tests. `nextCode` is what the
+// detector "sees" in the guide frame.
+let nextCode: string | null = null;
+vi.mock('@/lib/fastBarcode', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/fastBarcode')>();
+  return {
+    ...actual,
+    getDetector: vi.fn().mockResolvedValue({ detect: async () => (nextCode ? [{ rawValue: nextCode }] : []) }),
+  };
+});
 
 // Mock scanner module
 vi.mock('@/lib/scanner', async (importOriginal) => {
@@ -385,7 +400,7 @@ describe('CameraModal Component Lifecycle & Regression Tests', () => {
     });
   });
 
-  it('13. Live scanning only looks for barcodes and never runs cover OCR', async () => {
+  it('13. Cover mode never scans or runs OCR until a photo is taken', async () => {
     const handleRecognized = vi.fn();
     render(<CameraModal isOpen={true} onClose={vi.fn()} onRecognized={handleRecognized} />);
 
@@ -394,15 +409,71 @@ describe('CameraModal Component Lifecycle & Regression Tests', () => {
     await act(async () => {
       fireEvent(video, new Event('loadedmetadata'));
     });
-
-    // Several scan iterations (first after 400 ms, then every 300 ms).
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 1300));
+      await new Promise((r) => setTimeout(r, 500));
     });
 
-    expect(screen.getByText('Hledám čárový kód… Obálku vyfoťte tlačítkem.')).toBeInTheDocument();
+    expect(screen.getByTestId('cover-guide')).toBeInTheDocument();
+    expect(screen.queryByTestId('barcode-guide')).toBeNull();
     expect(scanner.processImageOrQuery).not.toHaveBeenCalled();
     expect(handleRecognized).not.toHaveBeenCalled();
   });
-});
 
+  it('14. ISBN mode shows the guide frame and hands over the book as soon as a code is read', async () => {
+    nextCode = null;
+    const resolveSpy = vi.spyOn(scanner, 'resolveBookFromBarcode').mockResolvedValue({
+      result: { title: 'Válka s mloky', author: 'Karel Čapek', isbn: '9788000061917' } as never,
+      confident: true,
+    });
+    const handleRecognized = vi.fn();
+    const handleClose = vi.fn();
+    render(<CameraModal isOpen={true} initialMode="barcode" onClose={handleClose} onRecognized={handleRecognized} />);
+
+    await waitFor(() => expect(getUserMediaMock).toHaveBeenCalledTimes(1));
+    const video = document.querySelector('video')!;
+    Object.defineProperty(video, 'videoWidth', { configurable: true, value: 1920 });
+    Object.defineProperty(video, 'videoHeight', { configurable: true, value: 1080 });
+    const box = screen.getByTestId('barcode-guide').parentElement!;
+    Object.defineProperty(box, 'clientWidth', { configurable: true, value: 360 });
+    Object.defineProperty(box, 'clientHeight', { configurable: true, value: 480 });
+    await act(async () => {
+      fireEvent(video, new Event('loadedmetadata'));
+    });
+
+    expect(screen.getByText('Namiř čárový kód do rámečku')).toBeInTheDocument();
+    // No code in view yet: nothing happens.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(resolveSpy).not.toHaveBeenCalled();
+
+    // A price sticker (not an ISBN) is ignored, the book's ISBN is taken at once.
+    nextCode = '8594003660085';
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    expect(resolveSpy).not.toHaveBeenCalled();
+    nextCode = '9788000061917';
+    await waitFor(() => expect(resolveSpy).toHaveBeenCalledWith('9788000061917'));
+    await waitFor(() => {
+      expect(handleRecognized).toHaveBeenCalledWith(expect.objectContaining({ title: 'Válka s mloky' }));
+      expect(handleClose).toHaveBeenCalled();
+    });
+    expect(scanner.processImageOrQuery).not.toHaveBeenCalled();
+    nextCode = null;
+  });
+
+  it('15. The mode switch moves between ISBN scanning and cover photos', async () => {
+    render(<CameraModal isOpen={true} initialMode="barcode" onClose={vi.fn()} onRecognized={vi.fn()} />);
+    await waitFor(() => expect(getUserMediaMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('tab', { name: /Čárový kód/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByLabelText('Vyfotit obálku')).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('tab', { name: /Obálka/ }));
+    });
+    expect(screen.getByRole('tab', { name: /Obálka/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Vyfotit obálku')).toBeInTheDocument();
+    expect(screen.getByTestId('cover-guide')).toBeInTheDocument();
+  });
+});

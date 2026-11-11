@@ -49,3 +49,6 @@ prisma/*.db-journal
 
 # Benchmark cache: covers, OCR output, HTTP responses (large, regenerable)
 /bench/data/
+
+# Copied from node_modules by scripts/copy-zxing-wasm.mjs
+/public/zxing_reader.wasm
