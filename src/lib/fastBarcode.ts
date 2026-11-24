@@ -10,10 +10,50 @@
 export const GUIDE = { width: 0.84, height: 0.34 } as const;
 // Long side the cropped region is scaled to before decoding.
 export const GUIDE_DECODE_MAX_SIDE = 1280;
-// Every other frame the whole visible picture is read at this size, which
-// catches a code held upright (rotated 90°) that doesn't fit the wide guide
-// (benchmark: 100 % of rot90 frames in 1.5 ms).
+// Size for reads of the whole visible picture.
 export const FULL_DECODE_MAX_SIDE = 960;
+
+// What consecutive camera frames are read as. ZXing-C++ handles codes lying
+// flat or held upright, but not ones tilted ~35°, so some frames are read
+// from a copy turned back by 30° (without them the benchmark reads 0 % of
+// codes tilted 35°). The guide comes every other frame: a code aimed into it
+// never waits more than one frame.
+export type FrameRead = { area: 'guide' | 'whole'; tilt: number };
+export const FRAME_PLAN: FrameRead[] = [
+  { area: 'guide', tilt: 0 },
+  { area: 'whole', tilt: 0 },
+  { area: 'guide', tilt: 0 },
+  { area: 'whole', tilt: 30 },
+  { area: 'guide', tilt: 0 },
+  { area: 'whole', tilt: -30 },
+];
+
+// Draws one read of the plan into the canvas (the caller decodes it).
+export function drawFrameRead(
+  canvas: HTMLCanvasElement,
+  source: CanvasImageSource,
+  read: FrameRead,
+  videoWidth: number,
+  videoHeight: number,
+  boxWidth: number,
+  boxHeight: number
+): boolean {
+  const r = (read.area === 'whole' ? visibleRect : guideRect)(videoWidth, videoHeight, boxWidth, boxHeight);
+  const maxSide = read.area === 'whole' ? FULL_DECODE_MAX_SIDE : GUIDE_DECODE_MAX_SIDE;
+  const scale = Math.min(1, maxSide / Math.max(r.width, r.height));
+  canvas.width = Math.round(r.width * scale);
+  canvas.height = Math.round(r.height * scale);
+  // The decoder reads the pixels back, so keep them on the CPU side.
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return false;
+  if (read.tilt) {
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate((read.tilt * Math.PI) / 180);
+    ctx.translate(-canvas.width / 2, -canvas.height / 2);
+  }
+  ctx.drawImage(source, r.x, r.y, r.width, r.height, 0, 0, canvas.width, canvas.height);
+  return true;
+}
 
 export interface Rect {
   x: number;

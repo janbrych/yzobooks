@@ -1,6 +1,7 @@
 // Client-side OCR and online book recognition utility for static / GitHub Pages support
 
 import { createWorker, PSM, type Worker } from 'tesseract.js';
+import { raceSources } from './lookupRace.ts';
 
 // Re-creating and tearing down a Tesseract worker (which loads the language
 // model) on every single scan is the dominant cost of the recognition loop —
@@ -194,7 +195,7 @@ function isbn10To13(isbn10: string): string {
 }
 
 // Compare codes across ISBN-10 / ISBN-13 forms of the same book.
-function comparableCode(code: string): string {
+export function comparableCode(code: string): string {
   return code.length === 10 && isValidISBN10(code) ? isbn10To13(code) : code;
 }
 
@@ -212,9 +213,16 @@ const KNIHOVNY_FIELDS = [
   'summary',
 ];
 
-function knihovnyUrl(lookfor: string, type: string, limit: number): string {
+const KNIHOVNY_API = 'https://www.knihovny.cz';
+// Moravská zemská knihovna runs the same catalog software with the same API.
+// It holds the legal deposit of Czech books and usually answers in ~0.3 s.
+// Knihovny.cz knows more books, but its speed varies a lot: ~0.3 s on a good
+// day, 4–20 s or errors on a bad one.
+const MZK_API = 'https://vufind.mzk.cz';
+
+function knihovnyUrl(lookfor: string, type: string, limit: number, base = KNIHOVNY_API): string {
   const fields = KNIHOVNY_FIELDS.map((f) => `&field[]=${f}`).join('');
-  return `https://www.knihovny.cz/api/v1/search?lookfor=${encodeURIComponent(lookfor)}&type=${type}&limit=${limit}${fields}`;
+  return `${base}/api/v1/search?lookfor=${encodeURIComponent(lookfor)}&type=${type}&limit=${limit}${fields}`;
 }
 
 const firstString = (value: unknown): string =>
@@ -259,16 +267,21 @@ function mapKnihovnyRecord(rec: Record<string, unknown>, coverIsbn: string): Boo
   };
 }
 
-async function fetchKnihovnyRecords(url: string): Promise<Record<string, unknown>[]> {
+// Cancelled on purpose (another catalog answered first) — not worth a log line.
+function isAbort(err: unknown): boolean {
+  return (err as { name?: string })?.name === 'AbortError';
+}
+
+async function fetchKnihovnyRecords(url: string, signal?: AbortSignal): Promise<Record<string, unknown>[]> {
   try {
-    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    const res = await fetch(url, { headers: { Accept: 'application/json' }, ...(signal ? { signal } : {}) });
     if (!res.ok) return [];
     const contentType = res.headers.get('content-type') || '';
     if (!contentType.includes('json')) return [];
     const data = await res.json();
     return Array.isArray(data?.records) ? data.records : [];
   } catch (err) {
-    console.error('Knihovny.cz API search error:', err);
+    if (!isAbort(err)) console.error('Knihovny.cz API search error:', err);
     return [];
   }
 }
@@ -276,12 +289,12 @@ async function fetchKnihovnyRecords(url: string): Promise<Record<string, unknown
 // Direct search Knihovny.cz API by ISBN/EAN. The ISN index also matches
 // records that merely mention the code somewhere, so only records that list
 // the code among their own ISBNs are kept.
-export async function searchKnihovnyCz(isbn: string): Promise<BookSearchResult[]> {
+export async function searchKnihovnyCz(isbn: string, { base = KNIHOVNY_API, signal }: { base?: string; signal?: AbortSignal } = {}): Promise<BookSearchResult[]> {
   const code = normalizeISBNInput(isbn);
   if (!code) return [];
   const wanted = comparableCode(code);
 
-  const records = await fetchKnihovnyRecords(knihovnyUrl(code, 'ISN', 20));
+  const records = await fetchKnihovnyRecords(knihovnyUrl(code, 'ISN', 20, base), signal);
   return records
     .filter((rec) => {
       const isbns = Array.isArray(rec.isbns) ? rec.isbns : [];
@@ -314,10 +327,10 @@ export function resetGoogleBooksBackoff(): void {
 }
 
 // Direct search Google Books API
-export async function searchGoogleBooks(query: string): Promise<BookSearchResult[]> {
+export async function searchGoogleBooks(query: string, signal?: AbortSignal): Promise<BookSearchResult[]> {
   if (Date.now() < googleBlockedUntil) return [];
   try {
-    const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=5`);
+    const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=5`, signal ? { signal } : undefined);
     if (res.status === 429) googleBlockedUntil = Date.now() + GOOGLE_QUOTA_BACKOFF_MS;
     if (!res.ok) return [];
     const data = await res.json();
@@ -342,7 +355,7 @@ export async function searchGoogleBooks(query: string): Promise<BookSearchResult
       };
     });
   } catch (err) {
-    console.error('Google Books API search error:', err);
+    if (!isAbort(err)) console.error('Google Books API search error:', err);
     return [];
   }
 }
@@ -388,10 +401,10 @@ interface OpenLibraryEdition {
 // (the original title, language and first publication year), which is wrong
 // for a specific edition: the Penguin English "Crime and Punishment" came
 // back as "Преступление и наказание", 1866.
-export async function searchOpenLibraryByISBN(isbn: string): Promise<BookSearchResult[]> {
+export async function searchOpenLibraryByISBN(isbn: string, signal?: AbortSignal): Promise<BookSearchResult[]> {
   try {
     const code = normalizeISBNInput(isbn);
-    const res = await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(code)}&format=json&jscmd=data`);
+    const res = await fetch(`https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(code)}&format=json&jscmd=data`, signal ? { signal } : undefined);
     if (!res.ok) return [];
     const data = await res.json();
     const edition = data?.[`ISBN:${code}`] as OpenLibraryEdition | undefined;
@@ -412,21 +425,67 @@ export async function searchOpenLibraryByISBN(isbn: string): Promise<BookSearchR
       },
     ];
   } catch (err) {
-    console.error('OpenLibrary edition lookup error:', err);
+    if (!isAbort(err)) console.error('OpenLibrary edition lookup error:', err);
     return [];
   }
 }
 
-// Catalog lookup by an exact ISBN/EAN, most local source first.
-async function searchByISBN(isbn: string): Promise<BookSearchResult[]> {
-  let results = await searchKnihovnyCz(isbn);
-  if (results.length === 0) {
-    results = await searchGoogleBooks(`isbn:${isbn}`);
+// Codes already looked up on this device: scanning a known book again (moving
+// it to another shelf, a second copy) needs no network at all.
+const LOOKUP_CACHE_KEY = 'yzobooks_isbn_cache';
+const LOOKUP_CACHE_MAX = 400;
+const LOOKUP_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+type LookupCache = Record<string, { at: number; results: BookSearchResult[] }>;
+
+function readLookupCache(): LookupCache {
+  if (typeof window === 'undefined') return {};
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LOOKUP_CACHE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
   }
-  if (results.length === 0) {
-    results = await searchOpenLibraryByISBN(isbn);
+}
+
+function rememberLookup(isbn: string, results: BookSearchResult[]): void {
+  if (typeof window === 'undefined' || results.length === 0) return;
+  try {
+    const cache = readLookupCache();
+    cache[isbn] = { at: Date.now(), results: results.slice(0, 5) };
+    const keys = Object.keys(cache).sort((a, b) => cache[b].at - cache[a].at);
+    keys.slice(LOOKUP_CACHE_MAX).forEach((k) => delete cache[k]);
+    localStorage.setItem(LOOKUP_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // Storage full or blocked: the cache is only a speed-up.
   }
-  return dedupeResults(results);
+}
+
+// How long a scan waits for the catalogs before offering manual entry.
+// Background lookups (serial scanning) can afford to wait longer.
+export const LOOKUP_DEADLINE_MS = 9000;
+export const BACKGROUND_LOOKUP_DEADLINE_MS = 30000;
+
+// Catalog lookup by an exact ISBN/EAN. Knihovny.cz, MZK and Open Library are
+// asked at once, Google Books only when those are slow or empty. A Czech
+// library record is taken the moment it arrives; an Open Library or Google one
+// waits a while for it, since those describe editions worse.
+async function searchByISBN(isbn: string, deadlineMs = LOOKUP_DEADLINE_MS): Promise<BookSearchResult[]> {
+  const cached = readLookupCache()[isbn];
+  if (cached && Date.now() - cached.at < LOOKUP_CACHE_TTL_MS) return cached.results;
+
+  const czech = isbn.startsWith('97880') || isbn.startsWith('80');
+  const found = await raceSources<BookSearchResult>(
+    [
+      { name: 'mzk', preferred: true, run: (signal) => searchKnihovnyCz(isbn, { base: MZK_API, signal }) },
+      { name: 'openlibrary', preferred: false, run: (signal) => searchOpenLibraryByISBN(isbn, signal) },
+      { name: 'knihovny', preferred: true, run: (signal) => searchKnihovnyCz(isbn, { signal }) },
+      { name: 'google', preferred: false, backup: true, run: (signal) => searchGoogleBooks(`isbn:${isbn}`, signal) },
+    ],
+    { hedgeMs: 700, graceMs: czech ? 1500 : 800, deadlineMs }
+  );
+  const results = dedupeResults(found);
+  rememberLookup(isbn, results);
+  return results;
 }
 
 // Several catalog records for one code are usually the same book held by
@@ -445,10 +504,10 @@ function dedupeResults(results: BookSearchResult[]): BookSearchResult[] {
 // Look up a manually entered or scanned code. Unlike resolveBookFromText this
 // never falls back to a fuzzy text search: a wrong-but-plausible match is
 // exactly what the user is trying to correct by typing the code in.
-export async function lookupBooksByISBN(raw: string): Promise<BookSearchResult[]> {
+export async function lookupBooksByISBN(raw: string, deadlineMs?: number): Promise<BookSearchResult[]> {
   const isbn = normalizeISBNInput(raw);
   if (!isValidISBN(isbn)) return [];
-  const results = await searchByISBN(isbn);
+  const results = await searchByISBN(isbn, deadlineMs);
   return results.map((r) => ({ ...r, isbn: r.isbn || isbn }));
 }
 

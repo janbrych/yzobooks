@@ -14,6 +14,7 @@ vi.mock('lucide-react', () => ({
   ScanBarcode: () => <div data-testid="barcode-icon" />,
   BookImage: () => <div data-testid="book-image-icon" />,
   Flashlight: () => <div data-testid="flashlight-icon" />,
+  Layers: () => <div data-testid="layers-icon" />,
   Lightbulb: () => <div data-testid="lightbulb-icon" />,
 }));
 
@@ -475,5 +476,53 @@ describe('CameraModal Component Lifecycle & Regression Tests', () => {
     expect(screen.getByRole('tab', { name: /Obálka/ })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByLabelText('Vyfotit obálku')).toBeInTheDocument();
     expect(screen.getByTestId('cover-guide')).toBeInTheDocument();
+  });
+
+  it('16. Serial scanning stores each book once, keeps the camera running and never opens the form', async () => {
+    localStorage.clear();
+    nextCode = null;
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    const lookup = vi.spyOn(scanner, 'lookupBooksByISBN').mockResolvedValue([]);
+    const handleRecognized = vi.fn();
+    const handleClose = vi.fn();
+    const onChanged = vi.fn();
+    const locations = [{ id: 'a', name: 'Regál A', shelves: [{ id: 'a1', name: 'Police 1' }] }];
+    render(
+      <CameraModal isOpen={true} initialMode="barcode" batch={{ locations, initialShelfId: 'a1', startOn: true, onChanged }} onClose={handleClose} onRecognized={handleRecognized} />
+    );
+    await waitFor(() => expect(getUserMediaMock).toHaveBeenCalledTimes(1));
+    const video = document.querySelector('video')!;
+    Object.defineProperty(video, 'videoWidth', { configurable: true, value: 1920 });
+    Object.defineProperty(video, 'videoHeight', { configurable: true, value: 1080 });
+    const box = screen.getByTestId('barcode-guide').parentElement!;
+    Object.defineProperty(box, 'clientWidth', { configurable: true, value: 360 });
+    Object.defineProperty(box, 'clientHeight', { configurable: true, value: 360 });
+    await act(async () => {
+      fireEvent(video, new Event('loadedmetadata'));
+    });
+
+    // The first code stays in view for many frames, then the next book comes.
+    nextCode = '9788000061917';
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 500));
+    });
+    nextCode = '9791032305690';
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    nextCode = null;
+
+    const saved = JSON.parse(localStorage.getItem('yzobooks_library_items') || '[]');
+    expect(saved.map((b: { isbn: string; shelfId: string }) => [b.isbn, b.shelfId])).toEqual([
+      ['9791032305690', 'a1'],
+      ['9788000061917', 'a1'],
+    ]);
+    expect(screen.getByTestId('batch-items').children).toHaveLength(2);
+    expect(onChanged).toHaveBeenCalled();
+    expect(getUserMediaMock).toHaveBeenCalledTimes(1);
+    expect(handleRecognized).not.toHaveBeenCalled();
+    expect(handleClose).not.toHaveBeenCalled();
+    lookup.mockRestore();
+    vi.unstubAllGlobals();
   });
 });

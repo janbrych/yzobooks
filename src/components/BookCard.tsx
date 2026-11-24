@@ -267,6 +267,14 @@ export function BookCard({ book, index = 0, highlighted = false, onEdit, onDelet
                 {location || 'Neurčeno'}
               </span>
             </div>
+            {location && (
+              <Link
+                href={`/regaly?kniha=${encodeURIComponent(book.id)}`}
+                className="flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold text-slate-950 bg-amber-500 hover:bg-amber-400"
+              >
+                <MapPin size={13} /> Ukázat na mapě
+              </Link>
+            )}
             {hasShelves && onSetShelf ? (
               <ShelfSelect id={`shelf-${book.id}`} locations={locations} value={book.shelfId} onChange={(shelfId) => onSetShelf(book, shelfId)} />
             ) : (

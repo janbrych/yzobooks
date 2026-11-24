@@ -49,6 +49,7 @@ describe('scanner module unit tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetGoogleBooksBackoff();
+    localStorage.clear(); // remembered code lookups
   });
 
   afterEach(() => {
@@ -264,10 +265,30 @@ describe('scanner module unit tests', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false } as Response);
     expect(await lookupBookByISBN('978-80-7483-208-6')).toBeNull();
     const urls = fetchSpy.mock.calls.map(([url]) => String(url));
-    expect(urls).toHaveLength(3);
-    expect(urls[0]).toContain('knihovny.cz');
-    expect(urls[1]).toContain('isbn%3A9788074832086');
-    expect(urls[2]).toContain('openlibrary.org/api/books?bibkeys=ISBN:9788074832086');
+    // Every catalog is asked, each one for the exact code only.
+    expect(urls).toHaveLength(4);
+    expect(urls.filter((u) => u.includes('lookfor=9788074832086&type=ISN')).map((u) => new URL(u).host).sort()).toEqual(['vufind.mzk.cz', 'www.knihovny.cz']);
+    expect(urls.some((u) => u.includes('isbn%3A9788074832086'))).toBe(true);
+    expect(urls.some((u) => u.includes('openlibrary.org/api/books?bibkeys=ISBN:9788074832086'))).toBe(true);
+  });
+
+  it('lookupBookByISBN answers a code looked up before without the network', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(knihovnyResponse([{ title: 'Bílá nemoc', isbns: ['978-80-7483-208-6'] }]));
+    await lookupBookByISBN('9788074832086');
+    fetchSpy.mockClear();
+    expect(await lookupBookByISBN('978-80-7483-208-6')).toMatchObject({ title: 'Bílá nemoc' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('a slow catalog does not hold up one that already answered', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((url) =>
+      String(url).includes('vufind.mzk.cz')
+        ? Promise.resolve(knihovnyResponse([{ title: 'Bílá nemoc', isbns: ['978-80-7483-208-6'] }]))
+        : new Promise<Response>(() => {})
+    );
+    const started = performance.now();
+    expect(await lookupBookByISBN('9788074832086')).toMatchObject({ title: 'Bílá nemoc' });
+    expect(performance.now() - started).toBeLessThan(300);
   });
 
   it('lookupBookByISBN returns the catalog match for a valid code', async () => {

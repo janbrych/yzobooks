@@ -1,14 +1,17 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Check, LibraryBig, MapPin, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Check, LayoutList, LibraryBig, Map as MapIcon, MapPin, Pencil, Plus, ScanBarcode, Search, Trash2, X } from 'lucide-react';
 import { BookCover } from '@/components/BookImages';
+import { CameraModal } from '@/components/CameraModal';
+import { LibraryMap } from '@/components/LibraryMap';
 import { Modal } from '@/components/Modal';
 import { ShelfSelect } from '@/components/ShelfSelect';
 import { Toaster } from '@/components/Toaster';
 import { toast } from '@/lib/toast';
-import { getLocalBooks, type LocalBook } from '@/lib/localStorage';
+import { loadBooks } from '@/lib/bookStore';
+import { type LocalBook } from '@/lib/localStorage';
 import {
   addBookcase,
   addShelf,
@@ -29,22 +32,15 @@ import { useLocations } from '@/lib/useLocations';
 
 type ShelfBook = Pick<LocalBook, 'id' | 'title' | 'author' | 'coverUrl' | 'isbn'> & { shelfId?: string | null };
 
-async function loadBooks(): Promise<ShelfBook[]> {
-  const res = await fetch('/api/books').catch(() => null);
-  if (res && res.ok) {
-    const data = await res.json().catch(() => ({}));
-    if (Array.isArray(data.books)) return data.books;
-  }
-  return getLocalBooks();
-}
-
 function norm(v: string | null | undefined) {
   return (v || '').toLocaleLowerCase('cs').normalize('NFD').replace(/[̀-ͯ]/g, '');
 }
 
-function matches(book: ShelfBook, q: string) {
-  if (!q) return true;
-  return [book.title, book.author, book.isbn].some((v) => norm(v).includes(q));
+// Every word has to be somewhere: in the book or in its place, so both
+// "capek" and "regal a police 2 mloky" work.
+function matches(book: ShelfBook, q: string, place: string | null = null) {
+  const text = norm([book.title, book.author, book.isbn, place].filter(Boolean).join(' '));
+  return q.split(/\s+/).every((word) => text.includes(word));
 }
 
 // ---------------------------------------------------------------------------
@@ -171,11 +167,21 @@ function AddNameForm({ placeholder, buttonLabel, onAdd, compact }: { placeholder
 }
 
 /** A book standing on a shelf board: its cover, tap for options. */
-function BookSpine({ book, onOpen }: { book: ShelfBook; onOpen: () => void }) {
+function BookSpine({ book, onOpen, highlighted = false }: { book: ShelfBook; onOpen: () => void; highlighted?: boolean }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    // Along the shelf only: the page itself stays on the map.
+    const button = ref.current;
+    const shelf = button?.parentElement;
+    if (!highlighted || !button || !shelf) return;
+    shelf.scrollLeft = button.offsetLeft - shelf.offsetLeft - (shelf.clientWidth - button.clientWidth) / 2;
+  }, [highlighted]);
   return (
     <button
+      ref={ref}
       onClick={onOpen}
       title={`${book.title}${book.author ? ` – ${book.author}` : ''}`}
+      aria-current={highlighted || undefined}
       className="group shrink-0 w-14 flex flex-col gap-1 text-left focus-visible:outline-none"
     >
       <BookCover
@@ -183,7 +189,7 @@ function BookSpine({ book, onOpen }: { book: ShelfBook; onOpen: () => void }) {
         title={book.title}
         author={book.author}
         compact
-        className="w-14 aspect-[2/3] rounded-md shadow-md shadow-black/50 ring-1 ring-white/10 group-hover:-translate-y-1 group-focus-visible:ring-2 group-focus-visible:ring-indigo-400 transition-transform"
+        className={`w-14 aspect-[2/3] rounded-md shadow-md shadow-black/50 ${highlighted ? 'ring-4 ring-amber-400 -translate-y-1' : 'ring-1 ring-white/10'} group-hover:-translate-y-1 group-focus-visible:ring-2 group-focus-visible:ring-indigo-400 transition-transform`}
       />
       <span className="text-[10px] leading-tight text-slate-400 line-clamp-2 group-hover:text-slate-200">{book.title}</span>
     </button>
@@ -201,6 +207,13 @@ export function LocationsScreen() {
   const [pickerShelf, setPickerShelf] = useState<string | null>(null);
   const [pickerQuery, setPickerQuery] = useState('');
   const [openBookId, setOpenBookId] = useState<string | null>(null);
+  const [view, setView] = useState<'map' | 'list'>('map');
+  const [selectedCase, setSelectedCase] = useState<string | null>(null);
+  // The shelf and book the user was looking for, lit up in the bookcase.
+  const [focus, setFocus] = useState<{ shelfId: string; bookId?: string } | null>(null);
+  // Shelf that serial scanning fills; null = scanner closed.
+  const [scanShelf, setScanShelf] = useState<string | null>(null);
+  const mapRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
     setBooks(await loadBooks());
@@ -223,13 +236,65 @@ export function LocationsScreen() {
     return map;
   }, [books, locations]);
 
+  const countsByCase = useMemo(
+    () => new Map(locations.map((c) => [c.id, c.shelves.reduce((n, s) => n + (booksByShelf.get(s.id)?.length || 0), 0)])),
+    [locations, booksByShelf]
+  );
+
   const unplaced = useMemo(() => books.filter((b) => !findShelf(locations, b.shelfId)), [books, locations]);
   const shelfCount = locations.reduce((n, c) => n + c.shelves.length, 0);
   const finderQuery = norm(finder.trim());
   const finderResults = useMemo(
-    () => (finderQuery ? books.filter((b) => matches(b, finderQuery)).slice(0, 8) : []),
-    [books, finderQuery]
+    () => (finderQuery ? books.filter((b) => matches(b, finderQuery, formatLocation(locations, b.shelfId))).slice(0, 12) : []),
+    [books, finderQuery, locations]
   );
+  // Bookcases and shelves whose own name matches.
+  const finderPlaces = useMemo(() => {
+    if (!finderQuery) return [];
+    const words = finderQuery.split(/\s+/);
+    const hit = (name: string) => words.every((w) => norm(name).includes(w));
+    return locations
+      .flatMap((c) => [
+        ...(hit(c.name) ? [{ key: c.id, caseId: c.id, shelfId: null as string | null, label: c.name, count: countsByCase.get(c.id) || 0 }] : []),
+        ...c.shelves
+          .filter((s) => hit(`${c.name} ${s.name}`) && !hit(c.name))
+          .map((s) => ({ key: s.id, caseId: c.id, shelfId: s.id as string | null, label: `${c.name} → ${s.name}`, count: booksByShelf.get(s.id)?.length || 0 })),
+      ])
+      .slice(0, 6);
+  }, [finderQuery, locations, countsByCase, booksByShelf]);
+
+  const showPlace = useCallback((caseId: string, shelfId: string | null, bookId?: string) => {
+    setView('map');
+    setSelectedCase(caseId);
+    setFocus(shelfId ? { shelfId, bookId } : null);
+    setFinder('');
+    setOpenBookId(null);
+    requestAnimationFrame(() => mapRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
+  }, []);
+
+  const showBook = useCallback(
+    (book: ShelfBook) => {
+      const loc = findShelf(locations, book.shelfId);
+      if (loc) showPlace(loc.bookcase.id, loc.shelf.id, book.id);
+      else setOpenBookId(book.id);
+    },
+    [locations, showPlace]
+  );
+
+  const selectCase = (id: string | null) => {
+    setSelectedCase(id);
+    setFocus(null);
+  };
+
+  // "Ukázat na mapě" elsewhere in the app links here as /regaly?kniha=<id>.
+  const linkHandled = useRef(false);
+  useEffect(() => {
+    if (linkHandled.current || !locationsLoaded || !booksLoaded) return;
+    linkHandled.current = true;
+    const id = new URLSearchParams(window.location.search).get('kniha');
+    const book = id ? books.find((b) => b.id === id) : null;
+    if (book) showBook(book);
+  }, [locationsLoaded, booksLoaded, books, showBook]);
 
   const setShelf = async (book: ShelfBook, shelfId: string | null, quiet = false) => {
     setBooks((prev) => prev.map((b) => (b.id === book.id ? { ...b, shelfId } : b)));
@@ -305,19 +370,28 @@ export function LocationsScreen() {
               type="search"
               value={finder}
               onChange={(e) => setFinder(e.target.value)}
-              placeholder="Kde stojí kniha? Název, autor, ISBN…"
+              placeholder="Kde to stojí? Kniha, autor, ISBN, regál, police…"
               aria-label="Najít umístění knihy"
               className="w-full bg-slate-900/80 border border-slate-800 rounded-2xl pl-10 pr-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500/70 focus:ring-4 focus:ring-amber-500/10"
             />
           </div>
           {finderQuery && (
-            <ul className="rounded-2xl border border-slate-800 bg-slate-900/80 divide-y divide-slate-800/80 overflow-hidden animate-rise">
-              {finderResults.length === 0 && <li className="px-4 py-3 text-xs text-slate-500">Nic nenalezeno</li>}
+            <ul data-testid="finder-results" className="rounded-2xl border border-slate-800 bg-slate-900/80 divide-y divide-slate-800/80 overflow-hidden animate-rise">
+              {finderPlaces.map((place) => (
+                <li key={place.key}>
+                  <button onClick={() => showPlace(place.caseId, place.shelfId)} className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-slate-800/60">
+                    <LibraryBig size={16} className="text-amber-300 shrink-0" />
+                    <span className="flex-1 min-w-0 text-sm font-medium text-amber-200 truncate">{place.label}</span>
+                    <span className="shrink-0 text-[11px] text-slate-500">{plural(place.count, ['kniha', 'knihy', 'knih'])}</span>
+                  </button>
+                </li>
+              ))}
+              {finderResults.length === 0 && finderPlaces.length === 0 && <li className="px-4 py-3 text-xs text-slate-500">Nic nenalezeno</li>}
               {finderResults.map((b) => {
                 const where = formatLocation(locations, b.shelfId);
                 return (
                   <li key={b.id}>
-                    <button onClick={() => setOpenBookId(b.id)} className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-slate-800/60">
+                    <button onClick={() => showBook(b)} className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-slate-800/60">
                       <span className="flex-1 min-w-0">
                         <span className="block text-sm text-slate-100 truncate">{b.title}</span>
                         <span className="block text-[11px] text-slate-500 truncate">{b.author || 'Neznámý autor'}</span>
@@ -333,7 +407,27 @@ export function LocationsScreen() {
           )}
         </section>
 
-        <AddNameForm placeholder="Nový regál, např. Regál A – Beletrie" buttonLabel="Regál" onAdd={(name) => setLocations(addBookcase(locations, name))} />
+        {locations.length > 0 && (
+          <div role="tablist" aria-label="Zobrazení" className="flex gap-1 p-1 rounded-xl bg-slate-900 border border-slate-800 self-start">
+            {([['map', 'Mapa', MapIcon], ['list', 'Všechny regály', LayoutList]] as const).map(([id, label, Icon]) => (
+              <button
+                key={id}
+                role="tab"
+                aria-selected={view === id}
+                onClick={() => setView(id)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${view === id ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-slate-200'}`}
+              >
+                <Icon size={14} /> {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {ready && locations.length > 0 && view === 'map' && (
+          <div ref={mapRef} className="scroll-mt-20">
+            <LibraryMap bookcases={locations} counts={countsByCase} selectedId={selectedCase} shelfName={findShelf(locations, focus?.shelfId)?.shelf.name} bookTitle={books.find((b) => b.id === focus?.bookId)?.title} onSelect={selectCase} />
+          </div>
+        )}
 
         {!ready ? (
           <div className="h-40 rounded-3xl skeleton animate-shimmer" aria-label="Načítám" />
@@ -346,8 +440,8 @@ export function LocationsScreen() {
             </p>
           </div>
         ) : (
-          <div className="grid gap-5 lg:grid-cols-2">
-            {locations.map((c, ci) => {
+          <div className={`grid gap-5 ${view === 'list' ? 'lg:grid-cols-2' : ''}`}>
+            {locations.filter((c) => view === 'list' || c.id === selectedCase).map((c, ci) => {
               const caseBooks = c.shelves.reduce((n, s) => n + (booksByShelf.get(s.id)?.length || 0), 0);
               return (
                 <section
@@ -373,11 +467,18 @@ export function LocationsScreen() {
                       const onShelf = booksByShelf.get(s.id) || [];
                       return (
                         <div key={s.id} className="flex flex-col gap-1.5" aria-label={`${c.name} → ${s.name}`} role="group">
-                          <div className="flex items-center gap-1 min-w-0">
+                          <div className={`flex items-center gap-1 min-w-0 rounded-lg ${focus?.shelfId === s.id ? 'bg-amber-500/15 ring-1 ring-amber-400/60 px-2 py-1' : ''}`}>
                             <div className="flex-1 min-w-0 flex items-center gap-2">
                               <EditableName name={s.name} label={`polici ${s.name}`} className="text-sm font-medium text-slate-200" onRename={(n) => setLocations(renameShelf(locations, s.id, n))} />
                               <span className="shrink-0 tabular-nums text-[10px] px-1.5 rounded-full bg-slate-800 text-slate-400">{onShelf.length}</span>
                             </div>
+                            <button
+                              onClick={() => setScanShelf(s.id)}
+                              aria-label={`Skenovat knihy na ${c.name} → ${s.name}`}
+                              className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-white bg-indigo-600 hover:bg-indigo-500"
+                            >
+                              <ScanBarcode size={12} /> Skenovat
+                            </button>
                             <button
                               onClick={() => {
                                 setPickerQuery('');
@@ -395,7 +496,7 @@ export function LocationsScreen() {
                               {onShelf.length === 0 ? (
                                 <span className="self-center text-[11px] text-slate-600 px-1">Prázdná police</span>
                               ) : (
-                                onShelf.map((b) => <BookSpine key={b.id} book={b} onOpen={() => setOpenBookId(b.id)} />)
+                                onShelf.map((b) => <BookSpine key={b.id} book={b} highlighted={focus?.bookId === b.id} onOpen={() => setOpenBookId(b.id)} />)
                               )}
                             </div>
                             <div aria-hidden className="h-2 rounded-full bg-gradient-to-b from-amber-700/80 to-amber-900 shadow-[0_6px_12px_-4px_rgb(0_0_0/0.6)]" />
@@ -410,6 +511,8 @@ export function LocationsScreen() {
             })}
           </div>
         )}
+
+        <AddNameForm placeholder="Nový regál, např. Regál A – Beletrie" buttonLabel="Regál" onAdd={(name) => setLocations(addBookcase(locations, name))} />
 
         {ready && books.length > 0 && (
           <section className="flex flex-col gap-2">
@@ -500,6 +603,14 @@ export function LocationsScreen() {
             )}
             {findShelf(locations, openBook.shelfId) && (
               <button
+                onClick={() => showBook(openBook)}
+                className="flex items-center justify-center gap-1.5 py-2 rounded-xl text-sm font-medium text-slate-950 bg-amber-500 hover:bg-amber-400"
+              >
+                <MapPin size={14} /> Ukázat na mapě
+              </button>
+            )}
+            {findShelf(locations, openBook.shelfId) && (
+              <button
                 onClick={() => setShelf(openBook, null)}
                 className="py-2 rounded-xl text-sm font-medium text-slate-300 bg-slate-800 hover:bg-slate-700"
               >
@@ -509,6 +620,17 @@ export function LocationsScreen() {
           </div>
         )}
       </Modal>
+
+      <CameraModal
+        isOpen={scanShelf !== null}
+        initialMode="barcode"
+        batch={{ locations, initialShelfId: scanShelf, startOn: true, onChanged: refresh }}
+        onClose={() => {
+          setScanShelf(null);
+          refresh();
+        }}
+        onRecognized={() => {}}
+      />
 
       <Toaster />
     </div>

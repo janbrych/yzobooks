@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
 import Link from 'next/link';
-import { Camera, Plus, Search, LogOut, Maximize, Minimize, BookOpen, Sparkles, X, LibraryBig, ScanBarcode } from 'lucide-react';
+import { Camera, Plus, Search, LogOut, Maximize, Minimize, BookOpen, Sparkles, X, LibraryBig, MapPin, ScanBarcode } from 'lucide-react';
 import { BookCard, type Book, type BookStatus } from '@/components/BookCard';
 import { CameraModal, BookData, type ScanMode } from '@/components/CameraModal';
 import { BookFormModal, BookFormData, BookFormInitialData } from '@/components/BookFormModal';
@@ -20,7 +20,9 @@ import {
 } from '@/lib/fullscreen';
 import { findCoverForBook } from '@/lib/bookMedia';
 import { getLocalBooks, addOrUpdateLocalBook, deleteLocalBook, LocalBook } from '@/lib/localStorage';
-import { assignBookShelf, formatLocation } from '@/lib/locations';
+import { assignBookShelf, findShelf, formatLocation, type Bookcase } from '@/lib/locations';
+import { completeBook, needsCatalogData } from '@/lib/quickAdd';
+import { getDetector } from '@/lib/fastBarcode';
 import { useLocations } from '@/lib/useLocations';
 
 type Filter = 'ALL' | 'READING' | 'UNREAD' | 'READ' | 'NOT_READ';
@@ -41,10 +43,20 @@ function matchesFilter(book: LocalBook, filter: Filter): boolean {
   return book.status === filter;
 }
 
-function matchesSearch(book: LocalBook, query: string): boolean {
+// Every word has to appear somewhere in the book or in its place, so
+// "čapek regál a" finds Čapek's books standing in Regál A.
+function matchesSearch(book: LocalBook, query: string, place: string | null): boolean {
   if (!query) return true;
-  const q = query.toLowerCase();
-  return [book.title, book.author, book.genre, book.publisher, book.isbn].some((v) => (v || '').toLowerCase().includes(q));
+  const text = [book.title, book.author, book.genre, book.publisher, book.isbn, place].filter(Boolean).join(' ').toLowerCase();
+  return query.toLowerCase().split(/\s+/).every((word) => text.includes(word));
+}
+
+// Place filter values: "" everywhere, "none" not placed, a bookcase or shelf id.
+function matchesPlace(book: LocalBook, place: string, locations: Bookcase[]): boolean {
+  if (!place) return true;
+  const loc = findShelf(locations, book.shelfId);
+  if (place === 'none') return !loc;
+  return loc?.bookcase.id === place || loc?.shelf.id === place;
 }
 
 // Standing books on the shelf (x, width, height, color); the shelf top is y = 80.
@@ -102,6 +114,7 @@ export default function Home() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showFullscreenButton, setShowFullscreenButton] = useState(true);
   const [locations] = useLocations();
+  const [placeFilter, setPlaceFilter] = useState('');
   const [highlightId, setHighlightId] = useState<string | null>(null);
   // Books removed from view but not yet deleted, so "Vrátit" can bring them back.
   const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set());
@@ -171,6 +184,29 @@ export default function Home() {
     }
   }, [user, fetchBooks]);
 
+  // Have the barcode reader ready before the scanner is opened.
+  useEffect(() => {
+    const timer = setTimeout(() => getDetector(process.env.NEXT_PUBLIC_BASE_PATH || '').catch(() => null), 1500);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Books from serial scanning whose catalog data never arrived (the app was
+  // closed, the catalog was down): try them again, once per visit.
+  const completionStarted = useRef(false);
+  useEffect(() => {
+    if (!booksLoaded || completionStarted.current) return;
+    completionStarted.current = true;
+    const pending = books.filter(needsCatalogData);
+    if (!pending.length) return;
+    (async () => {
+      let completed = 0;
+      for (const book of pending) {
+        if (await completeBook(book.id, book.isbn).catch(() => null)) completed++;
+      }
+      if (completed) fetchBooks();
+    })();
+  }, [booksLoaded, books, fetchBooks]);
+
   const shelf = useMemo(() => books.filter((b) => !pendingDeletes.has(b.id)), [books, pendingDeletes]);
   const counts = useMemo(() => {
     const c: Record<Filter, number> = { ALL: shelf.length, READING: 0, UNREAD: 0, READ: 0, NOT_READ: 0 };
@@ -181,8 +217,14 @@ export default function Home() {
     return c;
   }, [shelf]);
   const visibleBooks = useMemo(
-    () => shelf.filter((b) => matchesFilter(b, filterStatus) && matchesSearch(b, deferredSearch)),
-    [shelf, filterStatus, deferredSearch]
+    () =>
+      shelf.filter(
+        (b) =>
+          matchesFilter(b, filterStatus) &&
+          matchesPlace(b, placeFilter, locations) &&
+          matchesSearch(b, deferredSearch, formatLocation(locations, b.shelfId))
+      ),
+    [shelf, filterStatus, placeFilter, locations, deferredSearch]
   );
 
   const handleLogout = async () => {
@@ -255,6 +297,7 @@ export default function Home() {
     if (!isEdit) {
       setFilterStatus('ALL');
       setSearchQuery('');
+      setPlaceFilter('');
     }
     flashBook(savedId);
     toast(isEdit ? 'Změny uloženy' : `„${formData.title}“ je v knihovně`, { tone: 'success' });
@@ -489,6 +532,33 @@ export default function Home() {
           </div>
         </div>
 
+        {user && locations.length > 0 && (
+          <label className="-mt-2 flex items-center gap-2 text-xs text-slate-400 self-start max-w-full">
+            <MapPin size={14} className="text-amber-300 shrink-0" />
+            <span className="sr-only">Filtr podle regálu</span>
+            <select
+              value={placeFilter}
+              onChange={(e) => setPlaceFilter(e.target.value)}
+              className={`min-w-0 max-w-full rounded-xl border px-3 py-1.5 text-xs font-medium focus:outline-none focus:border-amber-500 ${
+                placeFilter ? 'bg-amber-500/15 border-amber-500/50 text-amber-200' : 'bg-slate-900 border-slate-800 text-slate-300'
+              }`}
+            >
+              <option value="">Všechny regály</option>
+              {locations.map((c) => (
+                <optgroup key={c.id} label={c.name}>
+                  <option value={c.id}>{c.name} (celý)</option>
+                  {c.shelves.map((sh) => (
+                    <option key={sh.id} value={sh.id}>
+                      {c.name} → {sh.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+              <option value="none">Bez umístění</option>
+            </select>
+          </label>
+        )}
+
         {/* Books Grid */}
         {showSkeleton ? (
           <div aria-label="Načítám knihovnu" className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
@@ -548,6 +618,7 @@ export default function Home() {
               onClick={() => {
                 setSearchQuery('');
                 setFilterStatus('ALL');
+                setPlaceFilter('');
               }}
               className="text-xs font-medium text-indigo-300 hover:text-indigo-200"
             >
@@ -617,6 +688,7 @@ export default function Home() {
       <CameraModal
         isOpen={cameraMode !== null}
         initialMode={cameraMode ?? 'barcode'}
+        batch={{ locations, onChanged: fetchBooks }}
         onClose={() => setCameraMode(null)}
         onRecognized={handleRecognizedBook}
       />

@@ -123,6 +123,8 @@ body {
   --animate-toast-out: toast-out 0.2s ease-in both;
   --animate-highlight: highlight 2.2s ease-out both;
   --animate-scan: scan 1.8s ease-in-out infinite;
+  --animate-route: route 0.9s linear infinite;
+  --animate-map-pulse: map-pulse 1.4s ease-in-out infinite;
   --animate-rise: rise 0.4s var(--ease-out-soft) both;
 
   @keyframes fade-in {
@@ -156,6 +158,13 @@ body {
   @keyframes highlight {
     0%, 30% { box-shadow: 0 0 0 3px rgb(129 140 248 / 0.9), 0 0 32px rgb(99 102 241 / 0.45); }
     100% { box-shadow: 0 0 0 0 rgb(129 140 248 / 0); }
+  }
+  @keyframes route {
+    to { stroke-dashoffset: -24; }
+  }
+  @keyframes map-pulse {
+    0%, 100% { opacity: 0.18; }
+    50% { opacity: 0.55; }
   }
   @keyframes scan {
     0% { top: 4%; opacity: 0; }
