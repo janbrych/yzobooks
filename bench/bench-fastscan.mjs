@@ -13,8 +13,8 @@ const DATASET = process.env.DATASET || 'dataset';
 const books = JSON.parse(readFileSync(path.join(here, 'data', `${DATASET}.json`), 'utf8'));
 const LIMIT = Number(process.env.LIMIT || books.length);
 
-const { guideRect, visibleRect, acceptBookCode, GUIDE_DECODE_MAX_SIDE, FULL_DECODE_MAX_SIDE } = await import('../src/lib/fastBarcode.ts');
-const { decodeGray, downscaleGray } = await import('../src/lib/barcodeDecode.ts');
+const { guideRect, visibleRect, acceptBookCode, GUIDE_DECODE_MAX_SIDE, FULL_DECODE_MAX_SIDE, FRAME_PLAN } = await import('../src/lib/fastBarcode.ts');
+const { decodeGray, downscaleGray, rotateGray, decodeLiveFrame } = await import('../src/lib/barcodeDecode.ts');
 const require = createRequire(import.meta.url);
 const { readBarcodes, prepareZXingModule } = await import('zxing-wasm/reader');
 await prepareZXingModule({
@@ -58,12 +58,34 @@ async function wasmRead(img) {
 const engines = {
   // BarcodeDetector's WebAssembly backend on the guide crop.
   wasm: async (f) => wasmRead(crop(f)),
-  // What the app does over two consecutive frames: the guide crop, then the
-  // whole visible picture at 960 px (time = both frames together).
-  app: async (f) => (await wasmRead(crop(f))) || wasmRead(crop(f, visible, FULL_DECODE_MAX_SIDE)),
+  // What the app does: the reads of FRAME_PLAN, one per camera frame, until
+  // one hits (time = all reads needed together).
+  app: async (f) => {
+    for (const read of FRAME_PLAN) {
+      let img = read.area === 'whole' ? crop(f, visible, FULL_DECODE_MAX_SIDE) : crop(f);
+      if (read.tilt) img = rotateGray(img, read.tilt);
+      const code = await wasmRead(img);
+      if (code) return code;
+    }
+    return null;
+  },
+  // The scanner before ISBN mode existed (full frame, JavaScript ZXing), over
+  // the three frames its extra attempts took.
+  previous: async (f) => {
+    const img = { data: f.gray, width: f.width, height: f.height };
+    for (let i = 0; i < 3; i++) {
+      const code = acceptBookCode(decodeLiveFrame(img, i));
+      if (code) return code;
+    }
+    return null;
+  },
   // The JavaScript ZXing on the guide crop (the fallback before WASM loads).
   zxingjs: async (f) => acceptBookCode(decodeGray(crop(f))),
 };
+
+// ENGINES=app,wasm measures only those (the old scanner is slow to benchmark).
+const wantedEngines = process.env.ENGINES?.split(',');
+if (wantedEngines) for (const e of Object.keys(engines)) if (!wantedEngines.includes(e)) delete engines[e];
 
 const only = process.argv.find((a) => a.startsWith('--variants='))?.split('=')[1]?.split(',');
 const results = {};

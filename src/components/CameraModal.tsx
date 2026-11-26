@@ -1,12 +1,18 @@
 'use client';
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Camera, RefreshCw, X, Check, Sparkles, ScanBarcode, BookImage, Flashlight, Lightbulb } from 'lucide-react';
+import { Camera, RefreshCw, X, Check, Sparkles, ScanBarcode, BookImage, Flashlight, Layers, Lightbulb } from 'lucide-react';
 import { processImageOrQuery, resolveBookFromBarcode, BookSearchResult, type BarcodeResolution } from '@/lib/scanner';
 import { ocrPasses } from '@/lib/imagePreprocessing';
 import { toast } from '@/lib/toast';
 import { decodeGray, decodePhoto, rgbaToGray, type GrayImage } from '@/lib/barcodeDecode';
-import { GUIDE, GUIDE_DECODE_MAX_SIDE, FULL_DECODE_MAX_SIDE, acceptBookCode, detectBookCode, getDetector, guideRect, visibleRect, type Detector } from '@/lib/fastBarcode';
+import { FRAME_PLAN, GUIDE, acceptBookCode, detectBookCode, drawFrameRead, getDetector, type Detector } from '@/lib/fastBarcode';
+import { beep, unlockBeep } from '@/lib/beep';
+import { loadBooks } from '@/lib/bookStore';
+import { formatLocation, plural, type Bookcase } from '@/lib/locations';
+import { createQuickAdder, type QuickAdder, type QuickAddItem, type QuickAddState } from '@/lib/quickAdd';
+import { BookCover } from '@/components/BookImages';
+import { ShelfSelect } from '@/components/ShelfSelect';
 import { measurePhoto, photoIssues, PHOTO_ISSUE_TEXT, type PhotoIssue } from '@/lib/photoQuality';
 
 export type ScanMode = 'barcode' | 'cover';
@@ -16,6 +22,39 @@ export type ScanMode = 'barcode' | 'cover';
 const BARCODE_ZOOM = 1.6;
 
 const BARCODE_HINT = 'Namiř čárový kód do rámečku';
+
+// Serial scanning: a code counts again once it has been out of view this long.
+const REPEAT_BLOCK_MS = 1500;
+const FLASH_MS = 350;
+const SCAN_SHELF_KEY = 'yzobooks_scan_shelf';
+const ITEM_STATE: Record<QuickAddState, { text: string; className: string }> = {
+  saving: { text: 'Uloženo, hledám název…', className: 'text-slate-400' },
+  added: { text: 'Přidáno', className: 'text-emerald-300' },
+  unknown: { text: 'Uloženo bez názvu, katalog kód nezná', className: 'text-amber-300' },
+  moved: { text: 'Už v knihovně, přesunuto sem', className: 'text-indigo-300' },
+  duplicate: { text: 'Už v knihovně', className: 'text-slate-400' },
+  failed: { text: 'Nepodařilo se uložit, naskenuj znovu', className: 'text-red-300' },
+};
+
+// Run on the camera's next frame. Not every browser can say when that is, and
+// a stalled video must not stop the loop, so a timer backs it up.
+function onNextFrame(video: HTMLVideoElement | null, run: () => void): () => void {
+  let fired = false;
+  const once = () => {
+    if (fired) return;
+    fired = true;
+    clearTimeout(timer);
+    run();
+  };
+  const hasCallback = typeof video?.requestVideoFrameCallback === 'function';
+  const timer = setTimeout(once, hasCallback ? 120 : 16);
+  const handle = hasCallback ? video!.requestVideoFrameCallback(once) : 0;
+  return () => {
+    fired = true;
+    clearTimeout(timer);
+    if (handle) video?.cancelVideoFrameCallback?.(handle);
+  };
+}
 const COVER_TIPS = [
   'Celou přední stranu obálky dej do rámečku',
   'Drž telefon rovně nad knihou, ne šikmo',
@@ -118,9 +157,18 @@ interface CameraModalProps {
   onRecognized: (bookData: BookData) => void;
   // Which way of adding a book the modal opens in; switchable inside.
   initialMode?: ScanMode;
+  // Offers serial scanning: codes go straight into the library, on a shelf.
+  batch?: BatchOptions;
 }
 
-export function CameraModal({ isOpen, onClose, onRecognized, initialMode = 'cover' }: CameraModalProps) {
+export interface BatchOptions {
+  locations: Bookcase[];
+  initialShelfId?: string | null;
+  startOn?: boolean; // open in serial mode and stay in it
+  onChanged: () => void; // books were added, moved or completed
+}
+
+export function CameraModal({ isOpen, onClose, onRecognized, initialMode = 'cover', batch }: CameraModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -139,11 +187,37 @@ export function CameraModal({ isOpen, onClose, onRecognized, initialMode = 'cove
   const [tipIndex, setTipIndex] = useState(0);
   const [torchSupported, setTorchSupported] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
+  const [batchOn, setBatchOn] = useState(false);
+  const [batchShelf, setBatchShelf] = useState<string | null>(null);
+  const [batchItems, setBatchItems] = useState<QuickAddItem[]>([]);
+  const [flash, setFlash] = useState(false);
+  const adderRef = useRef<Promise<QuickAdder> | null>(null);
+  const lastSeenRef = useRef(new Map<string, number>());
 
   // Each opening starts in the mode the user picked on the main screen.
   useEffect(() => {
     if (isOpen) setMode(initialMode);
   }, [isOpen, initialMode]);
+
+  // A fresh serial session per opening. The shelf is the one asked for, else
+  // the one filled last time.
+  const startBatchOn = Boolean(batch?.startOn);
+  const batchInitialShelf = batch?.initialShelfId ?? null;
+  useEffect(() => {
+    if (!isOpen) return;
+    unlockBeep();
+    adderRef.current = null;
+    lastSeenRef.current.clear();
+    setBatchItems([]);
+    setBatchOn(startBatchOn);
+    let remembered: string | null = null;
+    try {
+      remembered = localStorage.getItem(SCAN_SHELF_KEY);
+    } catch {
+      // storage blocked
+    }
+    setBatchShelf(batchInitialShelf ?? remembered);
+  }, [isOpen, startBatchOn, batchInitialShelf]);
 
   // Load the barcode detector as soon as the modal opens (the WebAssembly
   // fallback is ~1 MB), so it is ready when the camera is.
@@ -340,6 +414,7 @@ export function CameraModal({ isOpen, onClose, onRecognized, initialMode = 'cove
   };
 
   const handleClose = useCallback(() => {
+    setFlash(false);
     setCapturedImage(null);
     setPhotoWarnings([]);
     setCameraError(null);
@@ -349,8 +424,75 @@ export function CameraModal({ isOpen, onClose, onRecognized, initialMode = 'cove
     onClose();
   }, [onClose, stopCameraStream]);
 
-  // ISBN mode: read the guide frame of every camera frame until a book code
-  // shows up. One read of a valid ISBN is enough (see acceptBookCode).
+  // Serial scanning: the book is stored right away, its data arrives later.
+  const changeBatchShelf = (shelfId: string | null) => {
+    setBatchShelf(shelfId);
+    // The same books may now be meant for the new shelf.
+    lastSeenRef.current.clear();
+    try {
+      if (shelfId) localStorage.setItem(SCAN_SHELF_KEY, shelfId);
+      else localStorage.removeItem(SCAN_SHELF_KEY);
+    } catch {
+      // storage blocked
+    }
+  };
+
+  const batchLocations = batch?.locations;
+  // A remembered shelf may have been deleted since.
+  const activeShelf = batchLocations && formatLocation(batchLocations, batchShelf) ? batchShelf : null;
+
+  const addToBatch = (code: string) => {
+    const now = Date.now();
+    const seen = lastSeenRef.current.get(code);
+    lastSeenRef.current.set(code, now);
+    if (seen && now - seen < REPEAT_BLOCK_MS) return;
+
+    navigator.vibrate?.(40);
+    beep();
+    setFlash(true);
+    setTimeout(() => setFlash(false), FLASH_MS);
+
+    let first = true;
+    const onChange = (item: QuickAddItem) => {
+      const toFront = first;
+      first = false;
+      setBatchItems((prev) =>
+        toFront || !prev.some((p) => p.isbn === item.isbn)
+          ? [item, ...prev.filter((p) => p.isbn !== item.isbn)]
+          : prev.map((p) => (p.isbn === item.isbn ? item : p))
+      );
+      if (item.state === 'failed') {
+        beep(false);
+        lastSeenRef.current.delete(item.isbn);
+      }
+    };
+    adderRef.current = adderRef.current ?? loadBooks().then(createQuickAdder);
+    adderRef.current
+      .then((adder) => adder.add(code, activeShelf, onChange))
+      .catch((err) => console.error('Serial scan error:', err))
+      .finally(() => batchRef.current?.onChanged());
+  };
+
+  // What to do with a code that was just read; true ends the scanning loop.
+  const onCode = (code: string): boolean => {
+    if (batchOn) {
+      addToBatch(code);
+      return false;
+    }
+    navigator.vibrate?.(40);
+    beep();
+    setFoundCode(code);
+    return true;
+  };
+  const batchRef = useRef(batch);
+  const onCodeRef = useRef(onCode);
+  useEffect(() => {
+    batchRef.current = batch;
+    onCodeRef.current = onCode;
+  });
+
+  // ISBN mode: read camera frames as they come, following FRAME_PLAN, until a
+  // book code shows up. One read of a valid ISBN is enough (acceptBookCode).
   useEffect(() => {
     if (mode !== 'barcode' || !isOpen || capturedImage || !isVideoReady || !stream || isAnalyzing || foundCode) {
       return;
@@ -358,32 +500,32 @@ export function CameraModal({ isOpen, onClose, onRecognized, initialMode = 'cove
 
     let cancelled = false;
     let detector: Detector | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    let detectorFailed = false;
+    let cancelNext: () => void = () => {};
+    let jsReadAt = 0;
     const crop = document.createElement('canvas');
     getDetector(process.env.NEXT_PUBLIC_BASE_PATH || '')
       .then((d) => {
         detector = d;
       })
-      .catch(() => null);
+      .catch(() => {
+        detectorFailed = true;
+      });
 
     let frameIndex = 0;
     const readFrame = async (): Promise<string | null> => {
       const video = videoRef.current;
       const box = previewRef.current;
       if (!video?.videoWidth || !box?.clientWidth) return null;
-      // The guide frame, and with the detector every other frame the whole
-      // visible picture (a code held upright doesn't fit the wide guide).
-      const whole = !!detector && frameIndex++ % 2 === 1;
-      const r = (whole ? visibleRect : guideRect)(video.videoWidth, video.videoHeight, box.clientWidth, box.clientHeight);
-      const scale = Math.min(1, (whole ? FULL_DECODE_MAX_SIDE : GUIDE_DECODE_MAX_SIDE) / Math.max(r.width, r.height));
-      crop.width = Math.round(r.width * scale);
-      crop.height = Math.round(r.height * scale);
-      const ctx = crop.getContext('2d', { willReadFrequently: !detector });
-      if (!ctx) return null;
-      ctx.drawImage(video, r.x, r.y, r.width, r.height, 0, 0, crop.width, crop.height);
+      const read = detector ? FRAME_PLAN[frameIndex++ % FRAME_PLAN.length] : FRAME_PLAN[0];
+      // The JavaScript reader stands in until the detector has loaded, or for
+      // good if it can't. It blocks for ~100 ms a frame, so it is rationed.
+      if (!detector) {
+        if (performance.now() - jsReadAt < (detectorFailed ? 60 : 250)) return null;
+        jsReadAt = performance.now();
+      }
+      if (!drawFrameRead(crop, video, read, video.videoWidth, video.videoHeight, box.clientWidth, box.clientHeight)) return null;
       if (detector) return detectBookCode(detector, crop);
-      // Until the detector has loaded (or if it can't), the JavaScript reader
-      // on the guide crop.
       const gray = canvasGray(crop);
       return gray ? acceptBookCode(decodeGray(gray)) : null;
     };
@@ -397,19 +539,14 @@ export function CameraModal({ isOpen, onClose, onRecognized, initialMode = 'cove
         console.warn('Barcode scan error:', err);
       }
       if (cancelled) return;
-      if (code) {
-        navigator.vibrate?.(40);
-        setFoundCode(code);
-        return;
-      }
-      // Next frame right away: a crop of the guide decodes in a few ms.
-      timer = setTimeout(scan, 30);
+      if (code && onCodeRef.current(code)) return;
+      cancelNext = onNextFrame(videoRef.current, scan);
     };
-    timer = setTimeout(scan, 150);
+    scan();
 
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
+      cancelNext();
     };
   }, [mode, isOpen, capturedImage, isVideoReady, stream, isAnalyzing, foundCode]);
 
@@ -558,6 +695,10 @@ export function CameraModal({ isOpen, onClose, onRecognized, initialMode = 'cove
 
   if (!isOpen) return null;
 
+  const hit = Boolean(foundCode) || flash;
+  const newCount = batchItems.filter((i) => ['saving', 'added', 'unknown'].includes(i.state)).length;
+  const movedCount = batchItems.filter((i) => i.state === 'moved').length;
+
   const modeButton = (value: ScanMode, label: string, Icon: typeof Camera) => (
     <button
       type="button"
@@ -592,13 +733,39 @@ export function CameraModal({ isOpen, onClose, onRecognized, initialMode = 'cove
         </div>
 
         {/* Mode switch */}
+        {!startBatchOn && (
         <div role="tablist" aria-label="Způsob přidání" className="mx-4 mb-3 p-1 flex gap-1 bg-slate-950 border border-slate-800 rounded-xl">
           {modeButton('barcode', 'Čárový kód', ScanBarcode)}
           {modeButton('cover', 'Obálka', BookImage)}
         </div>
+        )}
+
+        {/* Serial scanning: one after another, straight onto a shelf */}
+        {batch && mode === 'barcode' && !capturedImage && (
+          <div className="mx-4 mb-3 flex items-center gap-2">
+            {!startBatchOn && (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={batchOn}
+                onClick={() => setBatchOn((v) => !v)}
+                className={`shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-colors ${
+                  batchOn ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-300'
+                }`}
+              >
+                <Layers size={14} /> Série
+              </button>
+            )}
+            {batchOn ? (
+              <ShelfSelect locations={batch.locations} value={activeShelf} onChange={changeBatchShelf} label="Ukládat na polici" className="!py-1.5" />
+            ) : (
+              <span className="text-[11px] leading-snug text-slate-400">Víc knih za sebou: kamera nečeká a ukládá rovnou na polici.</span>
+            )}
+          </div>
+        )}
 
         {/* Camera / Photo area */}
-        <div ref={previewRef} className="relative aspect-[3/4] w-full bg-slate-950 flex items-center justify-center overflow-hidden">
+        <div ref={previewRef} className={`relative w-full bg-slate-950 flex items-center justify-center overflow-hidden ${batchOn && mode === 'barcode' ? 'aspect-square' : 'aspect-[3/4]'}`}>
           {capturedImage ? (
             <img src={capturedImage} alt="Pořízená fotka" className="w-full h-full object-cover animate-fadeIn" />
           ) : stream ? (
@@ -609,14 +776,14 @@ export function CameraModal({ isOpen, onClose, onRecognized, initialMode = 'cove
                   {/* the guide frame, everything around it dimmed */}
                   <div
                     className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-2xl shadow-[0_0_0_9999px_rgb(2_6_23/0.55)] transition-colors ${
-                      foundCode ? 'ring-4 ring-emerald-400' : ''
+                      hit ? 'ring-4 ring-emerald-400' : ''
                     }`}
                     style={{ width: `${GUIDE.width * 100}%`, height: `${GUIDE.height * 100}%` }}
                   >
                     {['top-0 left-0 border-t-4 border-l-4 rounded-tl-2xl', 'top-0 right-0 border-t-4 border-r-4 rounded-tr-2xl', 'bottom-0 left-0 border-b-4 border-l-4 rounded-bl-2xl', 'bottom-0 right-0 border-b-4 border-r-4 rounded-br-2xl'].map((c) => (
-                      <span key={c} aria-hidden className={`absolute w-9 h-9 drop-shadow-[0_0_3px_rgb(0_0_0/0.9)] ${foundCode ? 'border-emerald-400' : 'border-white'} ${c}`} />
+                      <span key={c} aria-hidden className={`absolute w-9 h-9 drop-shadow-[0_0_3px_rgb(0_0_0/0.9)] ${hit ? 'border-emerald-400' : 'border-white'} ${c}`} />
                     ))}
-                    {!foundCode && (
+                    {!hit && (
                       <span aria-hidden className="absolute inset-x-4 top-1/2 h-0.5 -translate-y-1/2 rounded-full bg-red-500 shadow-[0_0_12px_2px_rgb(239_68_68/0.8)] animate-pulse" />
                     )}
                   </div>
@@ -735,6 +902,30 @@ export function CameraModal({ isOpen, onClose, onRecognized, initialMode = 'cove
                 <Check size={18} /> {photoWarnings.length ? 'Přesto vyhodnotit' : 'Vyhodnotit'}
               </button>
             </>
+          ) : mode === 'barcode' && batchOn ? (
+            <div className="flex-1 min-w-0 flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-slate-300" aria-live="polite">
+                  {batchItems.length === 0
+                    ? 'Skenuj jednu knihu za druhou.'
+                    : [newCount ? `+${plural(newCount, ['kniha', 'knihy', 'knih'])}` : '', movedCount ? `${movedCount} přesunuto` : ''].filter(Boolean).join(' · ') || 'Nic nového'}
+                </p>
+                <button onClick={handleClose} className="shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold">
+                  <Check size={16} /> Hotovo
+                </button>
+              </div>
+              <ul data-testid="batch-items" className="flex flex-col gap-1.5 h-36 overflow-y-auto overscroll-contain">
+                {batchItems.map((item) => (
+                  <li key={item.isbn} className="flex items-center gap-3 rounded-xl bg-slate-950/60 border border-slate-800 px-2.5 py-1.5 animate-rise">
+                    <BookCover src={item.coverUrl} title={item.title} author={item.author} compact className="w-7 aspect-[2/3] rounded shrink-0" />
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm text-slate-100 truncate">{item.title}</span>
+                      <span className={`block text-[11px] truncate ${ITEM_STATE[item.state].className}`}>{ITEM_STATE[item.state].text}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : mode === 'barcode' ? (
             <>
               <label className="flex-1 py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium text-sm flex items-center justify-center gap-2 cursor-pointer transition-colors text-center">
