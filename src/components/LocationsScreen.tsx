@@ -241,6 +241,8 @@ export function LocationsScreen() {
     [locations, booksByShelf]
   );
 
+  const shelfCounts = useMemo(() => new Map([...booksByShelf].map(([id, list]) => [id, list.length])), [booksByShelf]);
+
   const unplaced = useMemo(() => books.filter((b) => !findShelf(locations, b.shelfId)), [books, locations]);
   const shelfCount = locations.reduce((n, c) => n + c.shelves.length, 0);
   const finderQuery = norm(finder.trim());
@@ -425,7 +427,23 @@ export function LocationsScreen() {
 
         {ready && locations.length > 0 && view === 'map' && (
           <div ref={mapRef} className="scroll-mt-20">
-            <LibraryMap bookcases={locations} counts={countsByCase} selectedId={selectedCase} shelfName={findShelf(locations, focus?.shelfId)?.shelf.name} bookTitle={books.find((b) => b.id === focus?.bookId)?.title} onSelect={selectCase} />
+            <LibraryMap
+              bookcases={locations}
+              counts={countsByCase}
+              shelfCounts={shelfCounts}
+              onAddBookcase={() => {
+                const next = addBookcase(locations, '');
+                setLocations(next);
+                return next[next.length - 1].id;
+              }}
+              onRenameBookcase={(id, name) => setLocations(renameBookcase(locations, id, name))}
+              onDeleteBookcase={(id) => {
+                const c = locations.find((x) => x.id === id);
+                if (c) handleDeleteBookcase(c);
+              }}
+              onAddShelf={(id) => setLocations(addShelf(locations, id, ''))}
+              onScanShelf={(shelfId) => setScanShelf(shelfId)}
+              selectedId={selectedCase} shelfName={findShelf(locations, focus?.shelfId)?.shelf.name} bookTitle={books.find((b) => b.id === focus?.bookId)?.title} onSelect={selectCase} />
           </div>
         )}
 

@@ -3,6 +3,7 @@
 // (src/lib/locations.ts), so a library without a map works as before.
 
 import type { Bookcase } from '@/lib/locations';
+import { announceLocalChange, setDocTime } from '@/lib/localChanges';
 
 export interface Point {
   x: number;
@@ -19,14 +20,40 @@ export interface LibraryMapData {
   room: { w: number; h: number };
   door: Point;
   spots: Record<string, Spot>;
+  // Everything else in the room: tables, the desk, windows, labels…
+  items?: MapItem[];
 }
+
+export type MapItemType = 'table' | 'desk' | 'seat' | 'sofa' | 'plant' | 'column' | 'wall' | 'window' | 'rug' | 'stairs' | 'label';
+
+export interface MapItem extends Spot {
+  id: string;
+  type: MapItemType;
+  label?: string;
+}
+
+// What each kind of thing is called, how big it starts and whether people
+// have to walk around it.
+export const ITEM_TYPES: Record<MapItemType, { name: string; w: number; h: number; blocks: boolean }> = {
+  table: { name: 'Stůl', w: 150, h: 75, blocks: true },
+  desk: { name: 'Pult', w: 200, h: 75, blocks: true },
+  seat: { name: 'Křeslo', w: 75, h: 75, blocks: true },
+  sofa: { name: 'Gauč', w: 200, h: 75, blocks: true },
+  plant: { name: 'Květina', w: 50, h: 50, blocks: true },
+  column: { name: 'Sloup', w: 50, h: 50, blocks: true },
+  wall: { name: 'Stěna', w: 300, h: 25, blocks: true },
+  window: { name: 'Okno', w: 150, h: 25, blocks: false },
+  rug: { name: 'Koberec', w: 200, h: 150, blocks: false },
+  stairs: { name: 'Schody', w: 100, h: 200, blocks: true },
+  label: { name: 'Popisek', w: 200, h: 50, blocks: false },
+};
 
 export const GRID = 25;
 export const ROOM_MIN = 200;
 export const ROOM_MAX = 3000;
 export const CASE_DEPTH = 50;
 const CASE_LENGTH = 150;
-const CASE_MIN = 50;
+export const CASE_MIN = 25;
 const CASE_MAX = 800;
 // Room to walk between automatically placed bookcases.
 const AISLE = 100;
@@ -116,7 +143,8 @@ export function resizeRoom(map: LibraryMapData, size: Partial<LibraryMapData['ro
     room
   );
   const spots = Object.fromEntries(Object.entries(map.spots).map(([id, s]) => [id, clampSpot(s, room)]));
-  return { room, door, spots };
+  const items = map.items?.map((i) => ({ ...i, ...clampSpot(i, room) }));
+  return { ...map, room, door, spots, ...(items ? { items } : {}) };
 }
 
 /**
@@ -131,10 +159,11 @@ export function findRoute(map: LibraryMapData, spots: Record<string, Spot>, targ
   const center = (c: number, r: number): Point => ({ x: (c + 0.5) * GRID, y: (r + 0.5) * GRID });
   const inside = (p: Point, s: Spot) => p.x > s.x && p.x < s.x + s.w && p.y > s.y && p.y < s.y + s.h;
 
+  const obstacles = [...Object.values(spots), ...(map.items || []).filter((i) => ITEM_TYPES[i.type]?.blocks)];
   const blocked = new Uint8Array(cols * rows);
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      if (Object.values(spots).some((s) => inside(center(c, r), s))) blocked[r * cols + c] = 1;
+      if (obstacles.some((s) => inside(center(c, r), s))) blocked[r * cols + c] = 1;
     }
   }
   const startC = clamp(Math.floor(map.door.x / GRID), 0, cols - 1);
@@ -209,6 +238,54 @@ export function routeLength(route: Point[]): number {
   return route.slice(1).reduce((sum, p, i) => sum + Math.hypot(p.x - route[i].x, p.y - route[i].y), 0);
 }
 
+/** The free place for a w×h thing closest to `at`, searching outwards. */
+export function freeSpotNear(w: number, h: number, at: Point, taken: Spot[], room: LibraryMapData['room']): Spot {
+  const first = clampSpot({ x: at.x - w / 2, y: at.y - h / 2, w, h }, room);
+  for (let ring = 0; ring < 60; ring++) {
+    for (let dy = -ring; dy <= ring; dy++) {
+      for (let dx = -ring; dx <= ring; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+        const spot = clampSpot({ ...first, x: first.x + dx * GRID, y: first.y + dy * GRID }, room);
+        if (!taken.some((t) => overlaps(spot, t))) return spot;
+      }
+    }
+  }
+  return first;
+}
+
+/** A new thing of `type` on the free place nearest to `at`. */
+export function newItem(type: MapItemType, at: Point, room: LibraryMapData['room'], taken: Spot[] = []): MapItem {
+  const { w, h, name } = ITEM_TYPES[type];
+  const id = `item_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  // Rugs and labels may lie under other things.
+  const spot = ITEM_TYPES[type].blocks || type === 'window' ? freeSpotNear(w, h, at, taken, room) : clampSpot({ x: at.x - w / 2, y: at.y - h / 2, w, h }, room);
+  return { id, type, ...spot, ...(type === 'label' ? { label: name } : {}) };
+}
+
+/**
+ * Resize by dragging an edge or corner: `handle` says which sides move
+ * ("se" = bottom right). Free while dragging; snapped by clampSpot later.
+ */
+export function resizeFromHandle(start: Spot, handle: string, dx: number, dy: number, min = CASE_MIN): Spot {
+  let { x, y, w, h } = start;
+  if (handle.includes('e')) w = Math.max(min, start.w + dx);
+  if (handle.includes('s')) h = Math.max(min, start.h + dy);
+  if (handle.includes('w')) {
+    w = Math.max(min, start.w - dx);
+    x = start.x + start.w - w;
+  }
+  if (handle.includes('n')) {
+    h = Math.max(min, start.h - dy);
+    y = start.y + start.h - h;
+  }
+  return { x, y, w, h };
+}
+
+/** Like clampSpot, but the size is snapped too (after a resize). */
+export function snapSpot(spot: Spot, room: LibraryMapData['room']): Spot {
+  return clampSpot({ ...spot, w: Math.max(GRID, snap(spot.w)), h: Math.max(GRID, snap(spot.h)) }, room);
+}
+
 // ---- storage ---------------------------------------------------------------
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -225,7 +302,9 @@ function isMap(value: unknown): value is LibraryMapData {
       isNum(m.door.y) &&
       m.spots &&
       typeof m.spots === 'object' &&
-      Object.values(m.spots).every((s) => s && isNum(s.x) && isNum(s.y) && isNum(s.w) && isNum(s.h))
+      Object.values(m.spots).every((s) => s && isNum(s.x) && isNum(s.y) && isNum(s.w) && isNum(s.h)) &&
+      (m.items === undefined ||
+        (Array.isArray(m.items) && m.items.every((i) => i && typeof i.id === 'string' && i.type in ITEM_TYPES && isNum(i.x) && isNum(i.y) && isNum(i.w) && isNum(i.h))))
   );
 }
 
@@ -239,10 +318,12 @@ export function getLibraryMap(): LibraryMapData {
   }
 }
 
-export function saveLibraryMap(map: LibraryMapData): void {
+export function saveLibraryMap(map: LibraryMapData, syncedAt?: number): void {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+    setDocTime('map', syncedAt ?? Date.now());
+    if (syncedAt === undefined) announceLocalChange();
     window.dispatchEvent(new Event(CHANGE_EVENT));
   } catch (err) {
     console.error('Failed to save map:', err);

@@ -34,6 +34,10 @@ jobs:
         env:
           STATIC_EXPORT: "true"
           BASE_PATH: "/yzobooks"
+          # Accounts (Supabase). Repository variables, not secrets: the anon
+          # key is public by design. Unset = the app works on one device only.
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: npm run build
 
       - name: Verify static export artifact

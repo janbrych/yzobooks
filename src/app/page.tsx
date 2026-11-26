@@ -19,7 +19,10 @@ import {
   onFullscreenChange,
 } from '@/lib/fullscreen';
 import { findCoverForBook } from '@/lib/bookMedia';
-import { getLocalBooks, addOrUpdateLocalBook, deleteLocalBook, LocalBook } from '@/lib/localStorage';
+import { getLocalBooks, addOrUpdateLocalBook, deleteLocalBook, LocalBook, BOOKS_CHANGE_EVENT } from '@/lib/localStorage';
+import { cloudConfigured, signOut, syncNow } from '@/lib/cloud';
+import { useCloud } from '@/lib/useCloud';
+import { SyncBadge } from '@/components/SyncBadge';
 import { assignBookShelf, findShelf, formatLocation, type Bookcase } from '@/lib/locations';
 import { completeBook, needsCatalogData } from '@/lib/quickAdd';
 import { getDetector } from '@/lib/fastBarcode';
@@ -129,6 +132,10 @@ export default function Home() {
   const [cameraMode, setCameraMode] = useState<ScanMode | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const cloud = useCloud();
+  // With accounts set up, the device library is always there; signing in
+  // only adds syncing.
+  const signedIn = Boolean(cloud.user);
   const [editingBook, setEditingBook] = useState<BookFormInitialData | null>(null);
 
   const checkUser = useCallback(async () => {
@@ -170,6 +177,18 @@ export default function Home() {
   useEffect(() => {
     checkUser();
   }, [checkUser]);
+
+  // Books brought by the sync from other devices.
+  useEffect(() => {
+    const refresh = () => fetchBooks();
+    window.addEventListener(BOOKS_CHANGE_EVENT, refresh);
+    return () => window.removeEventListener(BOOKS_CHANGE_EVENT, refresh);
+  }, [fetchBooks]);
+
+  // Back from a "new password" e-mail link.
+  useEffect(() => {
+    if (cloud.recovering) setIsAuthOpen(true);
+  }, [cloud.recovering]);
 
   // Keep the icon right when fullscreen ends through Esc or a browser gesture,
   // and hide the button in the installed app, which already fills the screen.
@@ -228,6 +247,16 @@ export default function Home() {
   );
 
   const handleLogout = async () => {
+    if (cloud.user) {
+      if (!(await signOut())) {
+        const go = window.confirm('Poslední změny se nepodařilo uložit do účtu (jsi offline?). Odhlásit i tak? Tyto změny se ztratí.');
+        if (!go) return;
+        await signOut({ force: true });
+      }
+      fetchBooks();
+      toast('Odhlášeno. Knihovna zůstává uložená v účtu.', { tone: 'info' });
+      return;
+    }
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
     setUser(null);
     setBooks([]);
@@ -433,7 +462,7 @@ export default function Home() {
           </div>
           <div>
             <h1 className="font-bold text-base text-slate-50 leading-none tracking-tight">Knihovna</h1>
-            <p className="text-[10px] font-medium text-slate-400 mt-0.5">{user ? user.email : 'Osobní sbírka'}</p>
+            <p className="text-[10px] font-medium text-slate-400 mt-0.5">{cloud.user ? cloud.user.email : cloudConfigured ? 'Jen v tomto zařízení' : user ? user.email : 'Osobní sbírka'}</p>
           </div>
         </div>
 
@@ -462,7 +491,9 @@ export default function Home() {
             </button>
           )}
 
-          {user ? (
+          {cloud.user && <SyncBadge status={cloud.status} lastSyncedAt={cloud.lastSyncedAt} onRetry={() => syncNow()} />}
+
+          {signedIn || (user && !cloudConfigured) ? (
             <button
               onClick={handleLogout}
               title="Odhlásit se"
@@ -703,7 +734,7 @@ export default function Home() {
         initialData={editingBook}
       />
 
-      <AuthModal isOpen={isAuthOpen} onClose={() => setIsAuthOpen(false)} onSuccess={checkUser} />
+      <AuthModal isOpen={isAuthOpen} recovering={cloud.recovering} onClose={() => setIsAuthOpen(false)} onSuccess={checkUser} />
 
       <Toaster />
     </div>
