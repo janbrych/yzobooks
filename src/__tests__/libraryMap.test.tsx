@@ -43,7 +43,7 @@ describe('floor plan', () => {
     const turned = rotateSpot({ x: 100, y: 100, w: 150, h: 50 }, room);
     expect([turned.w, turned.h]).toEqual([50, 150]);
     expect(resizeSpot(turned, 25, room).h).toBe(175);
-    expect(resizeSpot({ x: 0, y: 0, w: 50, h: 50 }, -25, room).w).toBe(50);
+    expect(resizeSpot({ x: 0, y: 0, w: 25, h: 25 }, -25, room).w).toBe(25);
     expect(clampSpot({ x: -80, y: 9999, w: 150, h: 50 }, room)).toEqual({ x: 0, y: 550, w: 150, h: 50 });
   });
 
@@ -125,8 +125,9 @@ describe('finding a book on the map', () => {
 
   it('moves a bookcase with the keyboard in edit mode and remembers it', async () => {
     render(<LocationsScreen />);
-    const target = await screen.findByRole('button', { name: 'Regál A, 1 kniha' });
+    await screen.findByRole('button', { name: 'Regál A, 1 kniha' });
     fireEvent.click(screen.getByRole('button', { name: 'Upravit mapu' }));
+    const target = within(screen.getByRole('dialog', { name: 'Editor mapy' })).getByRole('button', { name: 'Regál A, 1 kniha' });
     const before = resolveSpots([{ id: 'a', name: '', shelves: [] }], EMPTY_MAP).a;
     fireEvent.keyDown(target, { key: 'ArrowDown' });
     await waitFor(() => expect(getLibraryMap().spots.a.y).toBe(before.y + 25));

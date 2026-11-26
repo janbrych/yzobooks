@@ -1,5 +1,7 @@
 // Client-side LocalStorage manager for offline / static export mode (e.g. GitHub Pages)
 
+import { addTombstone, announceLocalChange } from '@/lib/localChanges';
+
 export interface LocalBook {
   id: string;
   title: string;
@@ -21,6 +23,8 @@ export interface LocalBook {
 }
 
 const STORAGE_KEY = 'yzobooks_library_items';
+// Fired whenever the local books change, also when the sync brought them.
+export const BOOKS_CHANGE_EVENT = 'yzobooks-books-change';
 
 export function getLocalBooks(): LocalBook[] {
   if (typeof window === 'undefined') return [];
@@ -34,10 +38,14 @@ export function getLocalBooks(): LocalBook[] {
   }
 }
 
-export function saveLocalBooks(books: LocalBook[]): void {
+// `quiet` is for the sync writing what came from the account: no change to
+// send back.
+export function saveLocalBooks(books: LocalBook[], { quiet = false }: { quiet?: boolean } = {}): void {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(books));
+    if (!quiet) announceLocalChange();
+    window.dispatchEvent(new Event(BOOKS_CHANGE_EVENT));
   } catch (err) {
     console.error('Failed to save local books:', err);
   }
@@ -88,5 +96,7 @@ export function addOrUpdateLocalBook(bookData: Partial<LocalBook> & { id?: strin
 export function deleteLocalBook(id: string): void {
   const books = getLocalBooks();
   const filtered = books.filter((b) => b.id !== id);
+  if (filtered.length === books.length) return;
+  addTombstone(id);
   saveLocalBooks(filtered);
 }

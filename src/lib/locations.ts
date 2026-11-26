@@ -3,6 +3,7 @@
 // renaming a bookcase or shelf never has to touch the books themselves.
 
 import { getLocalBooks, addOrUpdateLocalBook } from '@/lib/localStorage';
+import { announceLocalChange, setDocTime } from '@/lib/localChanges';
 
 export interface Shelf {
   id: string;
@@ -121,10 +122,13 @@ export function getLocations(): Bookcase[] {
   }
 }
 
-export function saveLocations(list: Bookcase[]): void {
+// `syncedAt` is set by the sync when it writes what came from the account.
+export function saveLocations(list: Bookcase[], syncedAt?: number): void {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    setDocTime('locations', syncedAt ?? Date.now());
+    if (syncedAt === undefined) announceLocalChange();
     window.dispatchEvent(new Event(CHANGE_EVENT));
   } catch (err) {
     console.error('Failed to save locations:', err);
